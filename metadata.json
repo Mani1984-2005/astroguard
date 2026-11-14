@@ -1,0 +1,6 @@
+{
+  "name": "ASTROGUARD — Orbital Crew Biomedical Telemetry",
+  "description": "Astronaut health-monitoring and mission decision-support platform featuring simulated orbital telemetry, countermeasure tracking, and clinical triage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

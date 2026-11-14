@@ -1,0 +1,725 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated AstroGuard user account with trusted server-enforced RBAC role and assigned crew identifier.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["ASTRONAUT", "MEDICAL_CHIEF"]
+        },
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^(AG-LEO-[0-9]{2}|MCC-ALL|UNASSIGNED)$"
+        },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["ACTIVE", "PENDING", "SUSPENDED"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "email",
+        "displayName",
+        "role",
+        "crewId",
+        "accountStatus",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ProvisionedAccount": {
+      "title": "ProvisionedAccount",
+      "description": "Authorized role and crewId binding pre-provisioned by the Medical Chief for controlled account onboarding.",
+      "type": "object",
+      "properties": {
+        "emailKey": {
+          "type": "string",
+          "maxLength": 254
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["ASTRONAUT", "MEDICAL_CHIEF"]
+        },
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^(AG-LEO-[0-9]{2}|MCC-ALL)$"
+        },
+        "missionRole": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "provisionedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "emailKey",
+        "email",
+        "displayName",
+        "role",
+        "crewId",
+        "missionRole",
+        "provisionedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CrewMember": {
+      "title": "CrewMember",
+      "description": "Astronaut mission profile and operational metadata isolated by crewId.",
+      "type": "object",
+      "properties": {
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^AG-LEO-[0-9]{2}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "missionRole": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "missionId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "missionDay": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "orbitAltitude": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "inclination": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "bp": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "readiness": {
+          "type": "number"
+        },
+        "isSimulated": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "crewId",
+        "name",
+        "missionRole",
+        "missionId",
+        "missionDay",
+        "orbitAltitude",
+        "inclination",
+        "bp",
+        "readiness",
+        "isSimulated",
+        "updatedAt"
+      ]
+    },
+    "HealthRecord": {
+      "title": "HealthRecord",
+      "description": "Current simulated physiological readings and centralized evaluation output for an astronaut.",
+      "type": "object",
+      "properties": {
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^AG-LEO-[0-9]{2}$"
+        },
+        "evaluatedStatus": {
+          "type": "string",
+          "enum": ["SAFE", "CAUTION", "DANGER"]
+        },
+        "statusHeadline": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "statusSubtext": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "primaryParameter": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "primaryReading": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "hasMissingCriticalData": {
+          "type": "boolean"
+        },
+        "hrv": {
+          "type": "number"
+        },
+        "readings": {
+          "type": "object"
+        },
+        "scenarioId": {
+          "type": "string",
+          "enum": ["SAFE", "CAUTION", "DANGER", "MISSING_SENSOR"]
+        },
+        "isSimulated": {
+          "type": "boolean"
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "crewId",
+        "evaluatedStatus",
+        "statusHeadline",
+        "statusSubtext",
+        "primaryParameter",
+        "primaryReading",
+        "hasMissingCriticalData",
+        "hrv",
+        "readings",
+        "scenarioId",
+        "isSimulated",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "HealthHistoryEntry": {
+      "title": "HealthHistoryEntry",
+      "description": "Historical health event or telemetry transition log entry scoped strictly to one astronaut.",
+      "type": "object",
+      "properties": {
+        "recordId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^AG-LEO-[0-9]{2}$"
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "phase": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "metric": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "baselineDelta": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Nominal", "Monitored", "Critical"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "recordId",
+        "crewId",
+        "date",
+        "phase",
+        "metric",
+        "value",
+        "baselineDelta",
+        "status",
+        "createdAt"
+      ]
+    },
+    "HealthAssessmentEntry": {
+      "title": "HealthAssessmentEntry",
+      "description": "Self-reported pre/in-flight readiness assessment submitted by an astronaut.",
+      "type": "object",
+      "properties": {
+        "assessmentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^AG-LEO-[0-9]{2}$"
+        },
+        "authorUserId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "sleepQuality": {
+          "type": "number"
+        },
+        "fatigueLevel": {
+          "type": "number"
+        },
+        "vestibularComfort": {
+          "type": "number"
+        },
+        "hydrationAdequacy": {
+          "type": "number"
+        },
+        "visualClarity": {
+          "type": "number"
+        },
+        "readinessScore": {
+          "type": "number"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "assessmentId",
+        "crewId",
+        "authorUserId",
+        "sleepQuality",
+        "fatigueLevel",
+        "vestibularComfort",
+        "hydrationAdequacy",
+        "visualClarity",
+        "readinessScore",
+        "notes",
+        "createdAt"
+      ]
+    },
+    "AlertRecord": {
+      "title": "AlertRecord",
+      "description": "Centralized caution and critical alert tracked across astronaut and Medical Chief views.",
+      "type": "object",
+      "properties": {
+        "alertId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^AG-LEO-[0-9]{2}$"
+        },
+        "astronautName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["CAUTION", "CRITICAL"]
+        },
+        "affectedParameter": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "parameterLabel": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "previousStatus": {
+          "type": "string",
+          "enum": ["SAFE", "CAUTION", "DANGER"]
+        },
+        "newStatus": {
+          "type": "string",
+          "enum": ["SAFE", "CAUTION", "DANGER"]
+        },
+        "currentReading": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "previousReading": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "associatedCountermeasure": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "acknowledgementStatus": {
+          "type": "string",
+          "enum": ["UNACKNOWLEDGED", "ACKNOWLEDGED"]
+        },
+        "acknowledgedBy": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "acknowledgedByUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "acknowledgedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "resolutionStatus": {
+          "type": "string",
+          "enum": ["OPEN", "IN_REVIEW", "RESOLVED"]
+        },
+        "resolvedBy": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "resolvedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "timestampLabel": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "isSimulated": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "alertId",
+        "crewId",
+        "astronautName",
+        "severity",
+        "affectedParameter",
+        "parameterLabel",
+        "previousStatus",
+        "newStatus",
+        "currentReading",
+        "previousReading",
+        "associatedCountermeasure",
+        "message",
+        "acknowledgementStatus",
+        "acknowledgedBy",
+        "acknowledgedByUid",
+        "acknowledgedAt",
+        "resolutionStatus",
+        "resolvedBy",
+        "resolvedAt",
+        "timestampLabel",
+        "isSimulated",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CountermeasureRecord": {
+      "title": "CountermeasureRecord",
+      "description": "Countermeasure protocol adherence record isolated per astronaut crewId.",
+      "type": "object",
+      "properties": {
+        "recordId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^AG-LEO-[0-9]{2}$"
+        },
+        "countermeasureId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "schedule": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "intensity": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "duration": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "completionStatus": {
+          "type": "string",
+          "enum": ["PENDING", "IN_PROGRESS", "COMPLETED"]
+        },
+        "progress": {
+          "type": "number"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "recordId",
+        "crewId",
+        "countermeasureId",
+        "code",
+        "title",
+        "category",
+        "schedule",
+        "target",
+        "intensity",
+        "duration",
+        "completionStatus",
+        "progress",
+        "notes",
+        "updatedAt"
+      ]
+    },
+    "SurgeonNote": {
+      "title": "SurgeonNote",
+      "description": "Private Flight Surgeon clinical review notes accessible strictly to Medical Chief.",
+      "type": "object",
+      "properties": {
+        "noteId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "crewId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^AG-LEO-[0-9]{2}$"
+        },
+        "authorUserId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "author": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "time": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["noteId", "crewId", "authorUserId", "author", "time", "text", "createdAt"]
+    },
+    "EvaluationConfig": {
+      "title": "EvaluationConfig",
+      "description": "Configurable demonstration threshold parameters editable strictly by Medical Chief.",
+      "type": "object",
+      "properties": {
+        "configId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^default$"
+        },
+        "rules": {
+          "type": "object"
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["configId", "rules", "updatedBy", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Append-only security and clinical action audit log readable strictly by Medical Chief.",
+      "type": "object",
+      "properties": {
+        "logId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actorUserId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "actorEmail": {
+          "type": "string",
+          "maxLength": 254
+        },
+        "actorRole": {
+          "type": "string",
+          "enum": ["ASTRONAUT", "MEDICAL_CHIEF", "UNASSIGNED"]
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "targetRecord": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "logId",
+        "actorUserId",
+        "actorEmail",
+        "actorRole",
+        "action",
+        "targetRecord",
+        "details",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User RBAC profile mapping Firebase UID to trusted role and crewId."
+    },
+    "/provisionedAccounts/{emailKey}": {
+      "schema": { "$ref": "#/entities/ProvisionedAccount" },
+      "description": "Controlled onboarding bindings created by Medical Chief."
+    },
+    "/crew/{crewId}": {
+      "schema": { "$ref": "#/entities/CrewMember" },
+      "description": "Mission crew roster metadata isolated per crewId."
+    },
+    "/healthRecords/{crewId}": {
+      "schema": { "$ref": "#/entities/HealthRecord" },
+      "description": "Active telemetry snapshot and centralized evaluation result per astronaut."
+    },
+    "/healthRecords/{crewId}/history/{recordId}": {
+      "schema": { "$ref": "#/entities/HealthHistoryEntry" },
+      "description": "Per-astronaut health history entries."
+    },
+    "/healthRecords/{crewId}/assessments/{assessmentId}": {
+      "schema": { "$ref": "#/entities/HealthAssessmentEntry" },
+      "description": "Per-astronaut readiness self-assessment submissions."
+    },
+    "/alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/AlertRecord" },
+      "description": "Crew caution and critical alerts filtered strictly by crewId for astronauts and mission-wide for Medical Chief."
+    },
+    "/countermeasureRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/CountermeasureRecord" },
+      "description": "Per-astronaut countermeasure progress records."
+    },
+    "/surgeonNotes/{noteId}": {
+      "schema": { "$ref": "#/entities/SurgeonNote" },
+      "description": "Private Flight Surgeon clinical notes restricted to Medical Chief."
+    },
+    "/evaluationConfig/{configId}": {
+      "schema": { "$ref": "#/entities/EvaluationConfig" },
+      "description": "Centralized demonstration rule thresholds."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable security and alert review audit trail."
+    }
+  }
+}

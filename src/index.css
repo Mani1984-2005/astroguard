@@ -1,0 +1,257 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Outfit", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  html {
+    font-size: 17px;
+    background-color: #030712;
+    color: #f1f5f9;
+    font-family: var(--font-sans);
+    color-scheme: dark;
+  }
+
+  html[data-font-size='compact'] {
+    font-size: 15.25px;
+  }
+
+  html[data-font-size='standard'] {
+    font-size: 17px;
+  }
+
+  html[data-font-size='large'] {
+    font-size: 19px;
+  }
+
+  html,
+  body {
+    background-color: #030712;
+    color: #f1f5f9;
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    min-height: 100%;
+    overflow-x: clip;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Refined custom range sliders for cockpit precision */
+  input[type='range'] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 9999px;
+    background: rgba(148, 163, 184, 0.16);
+    outline: none;
+  }
+
+  input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #38bdf8;
+    border: 2px solid #030712;
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35);
+    cursor: pointer;
+    transition: transform 150ms ease, box-shadow 150ms ease;
+  }
+
+  input[type='range']::-webkit-slider-thumb:hover {
+    transform: scale(1.12);
+    box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.25);
+  }
+
+  input[type='range']::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #38bdf8;
+    border: 2px solid #030712;
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35);
+    cursor: pointer;
+  }
+
+  /* Subtle dark scrollbar */
+  ::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(3, 7, 18, 0.6);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.22);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(56, 189, 248, 0.42);
+  }
+}
+
+@layer utilities {
+  /* Calibrated Deep-Space Layered Surface System (no backdrop-filter over WebGL) */
+  .ag-surface-primary {
+    background: linear-gradient(180deg, rgba(10, 21, 42, 0.86) 0%, rgba(6, 13, 28, 0.9) 100%);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.08),
+      0 14px 36px rgba(2, 6, 18, 0.5);
+  }
+
+  .ag-surface-elevated {
+    background: linear-gradient(165deg, rgba(11, 24, 48, 0.9) 0%, rgba(5, 11, 24, 0.94) 100%);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    box-shadow: inset 0 1px 0 rgba(103, 232, 249, 0.14),
+      0 24px 64px rgba(2, 6, 18, 0.72);
+  }
+
+  .ag-surface-inset {
+    background: rgba(3, 8, 20, 0.74);
+    border: 1px solid rgba(148, 163, 184, 0.11);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+
+  .ag-hairline {
+    border-color: rgba(148, 163, 184, 0.12);
+  }
+
+  .ag-text-balance {
+    text-wrap: balance;
+  }
+
+  .ag-card-3d {
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 220ms ease,
+      box-shadow 220ms ease,
+      background-color 220ms ease;
+    box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.08),
+      0 12px 32px rgba(2, 6, 18, 0.45);
+  }
+
+  .ag-card-3d:hover {
+    transform: translateY(-2px);
+    border-color: rgba(56, 189, 248, 0.3);
+    box-shadow: inset 0 1px 0 rgba(103, 232, 249, 0.18),
+      0 18px 40px rgba(6, 28, 68, 0.45);
+  }
+
+  .ag-nav-3d {
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 180ms ease,
+      border-color 180ms ease,
+      box-shadow 180ms ease;
+  }
+
+  .ag-nav-3d:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(14, 165, 233, 0.22);
+  }
+
+  .ag-nav-3d:active:not(:disabled) {
+    transform: translateY(0px) scale(0.99);
+  }
+
+  @keyframes ag-telemetry-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+      box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.14);
+    }
+    50% {
+      opacity: 0.9;
+      transform: scale(1.012);
+      box-shadow: 0 0 18px 1px rgba(56, 189, 248, 0.24);
+    }
+  }
+
+  @keyframes ag-telemetry-pulse-caution {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+      box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.14);
+    }
+    50% {
+      opacity: 0.92;
+      transform: scale(1.012);
+      box-shadow: 0 0 18px 1px rgba(251, 191, 36, 0.24);
+    }
+  }
+
+  @keyframes ag-telemetry-pulse-danger {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.18);
+    }
+    50% {
+      opacity: 0.92;
+      transform: scale(1.014);
+      box-shadow: 0 0 20px 1px rgba(239, 68, 68, 0.3);
+    }
+  }
+
+  .ag-telemetry-pulse {
+    animation: ag-telemetry-pulse 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    will-change: transform, opacity;
+  }
+
+  .ag-telemetry-pulse-caution {
+    animation: ag-telemetry-pulse-caution 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    will-change: transform, opacity;
+  }
+
+  .ag-telemetry-pulse-danger {
+    animation: ag-telemetry-pulse-danger 1.85s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    will-change: transform, opacity;
+  }
+
+  @keyframes ag-orbital-kenburns {
+    0%,
+    100% {
+      transform: scale(1.06) translate3d(0px, 0px, 0px);
+    }
+    50% {
+      transform: scale(1.12) translate3d(-1.2%, -0.8%, 0px);
+    }
+  }
+
+  .ag-orbital-motion-bg {
+    animation: ag-orbital-kenburns 28s ease-in-out infinite;
+    will-change: transform;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-card-3d:hover,
+  .ag-nav-3d:hover:not(:disabled),
+  .ag-nav-3d:active:not(:disabled),
+  .ag-telemetry-pulse,
+  .ag-telemetry-pulse-caution,
+  .ag-telemetry-pulse-danger,
+  .ag-orbital-motion-bg {
+    transform: none !important;
+    animation: none !important;
+  }
+}
