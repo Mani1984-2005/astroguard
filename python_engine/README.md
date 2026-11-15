@@ -164,8 +164,10 @@ completion, and FastAPI success/failure responses.
   live NASA flight rule or a substitute for current NASA radiation-protection
   standards; verify the applicable limit before operational use.
 - Stress is a heuristic composite, not a validated psychological instrument.
-- The frontend derives a simulated daily log from interval telemetry; it is
-  labelled as simulated and is not a real medical record.
+- The frontend maps interval telemetry into a simulated daily log and places
+  snapshot-only values on the latest row. The UI does not provide exercise
+  history, so Python muscle and bone domains report `NO_DATA` for that input
+  instead of deriving exercise minutes.
 - Firebase Admin credentials are required for Firebase-bearer API access. A
   bearer token must also have a verified email and an active Firestore profile.
   Without Admin credentials, signed simulation/chief cookies still work and the

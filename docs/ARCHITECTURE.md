@@ -82,9 +82,9 @@ profiles are rejected before a report is returned.
 
 ### Astronaut or Medical Chief analysis
 
-1. Browser builds a simulated seven-row daily log from the current telemetry
-   series. Missing channels remain `null`; exercise minutes are prescribed demo
-   values.
+1. Browser maps available values from the simulated seven-day telemetry series
+   and puts snapshot-only measurements on the latest row. Missing historical
+   values and unavailable exercise measurements remain `null`.
 2. Browser sends `POST /api/health/analyze` with the crew ID and log.
 3. Express verifies the cookie or Firebase bearer and checks the actor's
    crew/role scope.

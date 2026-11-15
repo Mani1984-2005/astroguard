@@ -2,6 +2,7 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
 import { type App as AdminApp, cert, getApps, initializeApp } from 'firebase-admin/app';
@@ -88,8 +89,7 @@ class PythonHealthBridge {
     this.child = child;
 
     const startupTimer = setTimeout(() => {
-      this.readyReject?.(new Error('Python health bridge startup timed out.'));
-      this.reset();
+      this.failBridge(new Error('Python health bridge startup timed out.'));
     }, 45_000);
 
     child.stdout.setEncoding('utf8');
@@ -98,10 +98,12 @@ class PythonHealthBridge {
     child.stderr.on('data', (chunk: string) => {
       console.error('[AstroGuard Python]', chunk.trim().slice(0, 500));
     });
+    child.stdin.on('error', (error) => {
+      this.failBridge(new Error(`Unable to write to Python health engine: ${error.message}`));
+    });
     child.on('error', (error) => {
       clearTimeout(startupTimer);
-      this.failAll(new Error(`Unable to start Python health engine: ${error.message}`));
-      this.reset();
+      this.failBridge(new Error(`Unable to start Python health engine: ${error.message}`));
     });
     child.on('exit', (code) => {
       clearTimeout(startupTimer);
@@ -123,7 +125,8 @@ class PythonHealthBridge {
       try {
         message = JSON.parse(line) as PythonBridgeResponse & { ready?: boolean };
       } catch {
-        continue;
+        this.failBridge(new Error('Python health bridge returned malformed JSON.'));
+        return;
       }
       if (message.ready) {
         clearTimeout(startupTimer);
@@ -132,7 +135,10 @@ class PythonHealthBridge {
         this.readyReject = null;
         continue;
       }
-      if (!message.id) continue;
+      if (typeof message.id !== 'string' || typeof message.ok !== 'boolean') {
+        this.failBridge(new Error('Python health bridge returned an invalid response.'));
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) continue;
       clearTimeout(pending.timer);
@@ -150,6 +156,13 @@ class PythonHealthBridge {
     this.buffer = '';
   }
 
+  private failBridge(error: Error): void {
+    const child = this.child;
+    this.failAll(error);
+    this.reset();
+    child?.kill();
+  }
+
   private failAll(error: Error): void {
     for (const [, pending] of this.pending) {
       clearTimeout(pending.timer);
@@ -164,6 +177,7 @@ class PythonHealthBridge {
     const child = this.child;
     if (!child) throw new Error('Python health engine is unavailable.');
     const id = `${Date.now()}_${++this.seq}`;
+    const requestLine = JSON.stringify({ id, action, payload }) + '\n';
     const response = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -171,12 +185,27 @@ class PythonHealthBridge {
       }, 30_000);
       this.pending.set(id, { resolve, reject, timer });
     });
-    child.stdin.write(JSON.stringify({ id, action, payload }) + '\n');
+    try {
+      child.stdin.write(requestLine);
+    } catch (error) {
+      this.failBridge(
+        error instanceof Error ? error : new Error('Unable to write to Python health engine.')
+      );
+    }
     return response;
+  }
+
+  shutdown(): void {
+    const child = this.child;
+    if (!child) return;
+    this.failAll(new Error('Python health bridge is shutting down.'));
+    this.reset();
+    child.kill();
   }
 }
 
 const pythonHealthBridge = new PythonHealthBridge();
+process.once('exit', () => pythonHealthBridge.shutdown());
 
 interface ProvisionedChiefRecord {
   userId: string;
@@ -193,6 +222,7 @@ interface ProvisionedChiefRecord {
 }
 
 const PORT = Number(process.env.PORT || 3000);
+const TRUST_PROXY_SETTING = process.env.TRUST_PROXY?.trim();
 const ALLOWED_CREW_IDS = new Set(['AG-LEO-01', 'AG-LEO-02', 'AG-LEO-03', 'AG-LEO-04']);
 const BOOTSTRAPPED_CHIEF_EMAIL = (
   process.env.MEDICAL_CHIEF_EMAIL || 'manikantadindawar21@gmail.com'
@@ -204,7 +234,7 @@ const MAX_FAILED_ATTEMPTS = 5;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const CREW_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
-const AUDIT_LOG_PATH = '/tmp/astroguard-security-audit.log';
+const AUDIT_LOG_PATH = path.join(os.tmpdir(), 'astroguard-security-audit.log');
 const AUTH_STORE_DIR = path.resolve(process.cwd(), 'server-data');
 const CHIEF_AUTH_STORE_PATH = path.join(AUTH_STORE_DIR, 'medical-chief-auth.json');
 const HMAC_KEY_PATH = path.join(AUTH_STORE_DIR, 'session-hmac.key');
@@ -284,10 +314,6 @@ function initFirebaseAdmin(): void {
 initFirebaseAdmin();
 
 function getClientIp(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return forwarded.split(',')[0].trim();
-  }
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
@@ -298,6 +324,8 @@ function hashIpForAudit(ip: string): string {
 function appendSecurityAudit(entry: {
   eventType: string;
   actor: string;
+  actorEmail?: string;
+  actorRole?: 'ASTRONAUT' | 'MEDICAL_CHIEF' | 'UNASSIGNED';
   target: string;
   outcome: 'ALLOWED' | 'DENIED' | 'LOCKED' | 'CONFIG_ERROR';
   ip: string;
@@ -307,6 +335,8 @@ function appendSecurityAudit(entry: {
     ts: new Date().toISOString(),
     eventType: entry.eventType,
     actor: entry.actor,
+    actorEmail: entry.actorEmail || '',
+    actorRole: entry.actorRole || 'UNASSIGNED',
     target: entry.target,
     outcome: entry.outcome,
     ipHash: hashIpForAudit(entry.ip),
@@ -314,8 +344,8 @@ function appendSecurityAudit(entry: {
   };
   try {
     fs.appendFileSync(AUDIT_LOG_PATH, JSON.stringify(record) + '\n', { mode: 0o600 });
-  } catch {
-    // Non-fatal if /tmp is unavailable
+  } catch (error) {
+    console.error('[AstroGuard Server] Failed to write local security audit log:', error);
   }
 
   if (adminDb) {
@@ -326,14 +356,16 @@ function appendSecurityAudit(entry: {
       .set({
         logId,
         actorUserId: entry.actor.slice(0, 128),
-        actorEmail: BOOTSTRAPPED_CHIEF_EMAIL,
-        actorRole: 'MEDICAL_CHIEF',
+        actorEmail: (entry.actorEmail || '').slice(0, 254),
+        actorRole: entry.actorRole || 'UNASSIGNED',
         action: entry.eventType.slice(0, 120),
         targetRecord: entry.target.slice(0, 200),
         details: `${entry.details} [ip:${record.ipHash}]`.slice(0, 500),
         createdAt: FieldValue.serverTimestamp()
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        console.error('[AstroGuard Server] Failed to write Firestore security audit log:', error);
+      });
   }
 }
 
@@ -550,11 +582,7 @@ function parseCookies(req: Request): Record<string, string> {
 }
 
 function isHttpsRequest(req: Request): boolean {
-  const xfProto = req.headers['x-forwarded-proto'];
-  return (
-    req.secure ||
-    (typeof xfProto === 'string' && xfProto.split(',')[0].trim().toLowerCase() === 'https')
-  );
+  return req.secure;
 }
 
 function setHttpOnlyCookie(
@@ -697,7 +725,16 @@ function denyUnauthorized(req: Request, res: Response): void {
 
 async function startServer(): Promise<void> {
   const app = express();
-  app.set('trust proxy', 1);
+  if (!TRUST_PROXY_SETTING) {
+    app.set('trust proxy', false);
+  } else if (/^\d+$/.test(TRUST_PROXY_SETTING)) {
+    app.set('trust proxy', Number(TRUST_PROXY_SETTING));
+  } else {
+    app.set(
+      'trust proxy',
+      TRUST_PROXY_SETTING.split(',').map((proxy) => proxy.trim()).filter(Boolean)
+    );
+  }
   app.use(express.json({ limit: '128kb' }));
 
   // Block direct HTTP access to server-side secrets, auth store, scripts, or rules files
@@ -912,6 +949,8 @@ async function startServer(): Promise<void> {
         appendSecurityAudit({
           eventType: 'MEDICAL_CHIEF_AUTHORIZED',
           actor: userRecord.uid,
+          actorEmail: userRecord.email || activeConfig.account.email,
+          actorRole: 'MEDICAL_CHIEF',
           target: 'portal/medical-chief',
           outcome: 'ALLOWED',
           ip,
@@ -962,6 +1001,8 @@ async function startServer(): Promise<void> {
     appendSecurityAudit({
       eventType: 'MEDICAL_CHIEF_AUTHORIZED',
       actor: chiefSessionPayload.uid,
+      actorEmail: chiefSessionPayload.email,
+      actorRole: 'MEDICAL_CHIEF',
       target: 'portal/medical-chief',
       outcome: 'ALLOWED',
       ip,
@@ -1053,6 +1094,8 @@ async function startServer(): Promise<void> {
       appendSecurityAudit({
         eventType: 'CHIEF_PASSWORD_ROTATE_DENIED',
         actor: verified.uid,
+        actorEmail: verified.email,
+        actorRole: 'MEDICAL_CHIEF',
         target: 'portal/medical-chief/password',
         outcome: 'DENIED',
         ip,
@@ -1079,6 +1122,8 @@ async function startServer(): Promise<void> {
     appendSecurityAudit({
       eventType: 'CHIEF_PASSWORD_CHANGED',
       actor: verified.uid,
+      actorEmail: verified.email,
+      actorRole: 'MEDICAL_CHIEF',
       target: 'portal/medical-chief/password',
       outcome: 'ALLOWED',
       ip,
@@ -1117,6 +1162,8 @@ async function startServer(): Promise<void> {
           ts: string;
           eventType: string;
           actor: string;
+          actorEmail?: string;
+          actorRole?: 'ASTRONAUT' | 'MEDICAL_CHIEF' | 'UNASSIGNED';
           target: string;
           outcome: string;
           details: string;
@@ -1124,8 +1171,8 @@ async function startServer(): Promise<void> {
         return {
           id: `SRV_LOG_${idx}_${entry.ts}`,
           actorUserId: entry.actor,
-          actorEmail: verified.email,
-          actorRole: entry.actor.startsWith('SIM_') ? 'ASTRONAUT' : 'MEDICAL_CHIEF',
+          actorEmail: entry.actorEmail || '',
+          actorRole: entry.actorRole || 'UNASSIGNED',
           action: `${entry.eventType} (${entry.outcome})`,
           targetRecord: entry.target,
           details: entry.details,
@@ -1134,8 +1181,9 @@ async function startServer(): Promise<void> {
       });
 
       res.json({ ok: true, logs });
-    } catch {
-      res.json({ ok: true, logs: [] });
+    } catch (error) {
+      console.error('[AstroGuard Server] Failed to read local security audit log:', error);
+      res.status(500).json({ ok: false, error: 'Unable to read security audit logs.' });
     }
   });
 
@@ -1170,6 +1218,7 @@ async function startServer(): Promise<void> {
     appendSecurityAudit({
       eventType: 'CREW_SIMULATION_SESSION_ISSUED',
       actor: `SIM_${crewId}`,
+      actorRole: 'ASTRONAUT',
       target: `crew/${crewId}`,
       outcome: 'ALLOWED',
       ip,
@@ -1284,6 +1333,8 @@ async function startServer(): Promise<void> {
       appendSecurityAudit({
         eventType: 'HEALTH_API_CROSS_CREW_DENIED',
         actor: actor.userId,
+        actorEmail: actor.email,
+        actorRole: actor.role,
         target: `crew/${requestedCrewId}/health`,
         outcome: 'DENIED',
         ip,
@@ -1326,6 +1377,8 @@ async function startServer(): Promise<void> {
       appendSecurityAudit({
         eventType: 'HEALTH_API_ANALYZE',
         actor: actor.userId,
+        actorEmail: actor.email,
+        actorRole: actor.role,
         target: `crew/${crewId}/python-health`,
         outcome: 'ALLOWED',
         ip,
@@ -1337,6 +1390,8 @@ async function startServer(): Promise<void> {
       appendSecurityAudit({
         eventType: 'HEALTH_API_ANALYZE_FAILED',
         actor: actor.userId,
+        actorEmail: actor.email,
+        actorRole: actor.role,
         target: `crew/${crewId}/python-health`,
         outcome: 'DENIED',
         ip,
@@ -1371,6 +1426,8 @@ async function startServer(): Promise<void> {
       appendSecurityAudit({
         eventType: 'HEALTH_API_SIMULATE',
         actor: actor.userId,
+        actorEmail: actor.email,
+        actorRole: actor.role,
         target: 'python-engine/simulate',
         outcome: 'ALLOWED',
         ip: getClientIp(req),

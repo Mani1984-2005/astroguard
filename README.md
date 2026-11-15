@@ -38,6 +38,11 @@ The Express server starts the Python bridge on demand. The Python service is not
 publicly exposed; all browser health calls pass through the authenticated
 `/api/health/*` routes on the Express server.
 
+Express does not trust forwarded headers by default. If deploying behind a
+reverse proxy, set `TRUST_PROXY` to the exact trusted proxy hop count or to
+comma-separated trusted proxy IP/CIDR values so client IP and HTTPS cookie
+handling use only the configured proxy chain.
+
 ## Medical Chief access
 
 Provision the Medical Chief password hash without putting a password in the
@@ -83,8 +88,9 @@ completion, and FastAPI success/failure responses.
 ## Data and safety boundaries
 
 - Simulated telemetry is labelled throughout the UI.
-- The frontend derives a seven-row demonstration log from interval telemetry;
-  exercise minutes are prescribed demo values, not astronaut records.
+- The frontend maps interval telemetry into a seven-row demonstration log.
+  Snapshot-only values appear on the latest row, and unavailable exercise
+  history remains missing rather than being presented as observed activity.
 - Missing sensor data produces `NO_DATA`/`NO SIGNAL` behavior; it is never
   silently treated as healthy.
 - A WATCH finding prevents a `FINE` label. Any WATCH or ALERT is at least

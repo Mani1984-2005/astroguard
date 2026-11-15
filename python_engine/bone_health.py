@@ -23,7 +23,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 import os
+import tempfile
 from typing import Iterable
 
 import numpy as np
@@ -48,6 +50,15 @@ MAX_MONTHLY_LOSS_PCT = 1.5
 LOAD_MEMORY_DAYS = 10
 RISK_THRESHOLDS = (0.5, 1.5)  # next-30-day % loss: LOW <0.5, MEDIUM <1.5, HIGH
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bone_model.json")
+
+
+def _is_finite_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _profile_dict(profile) -> dict:
@@ -142,6 +153,26 @@ class BoneHealthModel:
         }
     )
 
+    def __post_init__(self) -> None:
+        if (
+            not _is_finite_number(self.target_load)
+            or self.target_load <= 0
+        ):
+            raise ValueError("target_load must be a finite positive number")
+        if (
+            not _is_finite_number(self.max_monthly_loss_pct)
+            or self.max_monthly_loss_pct < 0
+        ):
+            raise ValueError("max_monthly_loss_pct must be a finite non-negative number")
+        if (
+            isinstance(self.memory_days, bool)
+            or not isinstance(self.memory_days, int)
+            or self.memory_days < 1
+        ):
+            raise ValueError("memory_days must be a positive integer")
+        if not isinstance(self.metrics, dict):
+            raise ValueError("metrics must be a JSON object")
+
     @classmethod
     def train(cls, n_astronauts: int = 0, seed: int = 0, verbose: bool = False):
         """Return a calibrated model.
@@ -164,21 +195,50 @@ class BoneHealthModel:
             "memory_days": self.memory_days,
             "metrics": self.metrics,
         }
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+        directory = os.path.dirname(os.path.abspath(path))
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=directory,
+                prefix=".bone-model-",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temp_path = handle.name
+                json.dump(payload, handle, indent=2, allow_nan=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     @classmethod
     def load_or_train(cls, path: str = MODEL_PATH, **kwargs):
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
+            if not isinstance(payload, dict):
+                raise ValueError("bone model file must contain a JSON object")
+            for key in ("target_load", "max_monthly_loss_pct"):
+                value = payload.get(
+                    key,
+                    TARGET_LOAD if key == "target_load" else MAX_MONTHLY_LOSS_PCT,
+                )
+                if not _is_finite_number(value):
+                    raise ValueError(f"{key} must be a finite number")
+            memory_days = payload.get("memory_days", LOAD_MEMORY_DAYS)
+            if isinstance(memory_days, bool) or not isinstance(memory_days, int):
+                raise ValueError("memory_days must be a positive integer")
             return cls(
-                target_load=float(payload.get("target_load", TARGET_LOAD)),
-                max_monthly_loss_pct=float(
-                    payload.get("max_monthly_loss_pct", MAX_MONTHLY_LOSS_PCT)
+                target_load=payload.get("target_load", TARGET_LOAD),
+                max_monthly_loss_pct=payload.get(
+                    "max_monthly_loss_pct", MAX_MONTHLY_LOSS_PCT
                 ),
-                memory_days=int(payload.get("memory_days", LOAD_MEMORY_DAYS)),
-                metrics=payload.get("metrics") or {},
+                memory_days=memory_days,
+                metrics=payload.get("metrics", {}),
             )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             model = cls.train(**kwargs)

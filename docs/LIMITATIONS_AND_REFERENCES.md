@@ -30,9 +30,10 @@ and five-day outcomes are simulated. They are not real astronaut medical data.
 
 ## 3. Data and simulation limitations
 
-- The frontend derives a seven-row demonstration log from interval telemetry.
-  Exercise minutes are prescribed demo values; they are not records of real
-  activity.
+- The frontend maps interval telemetry into a seven-row demonstration log.
+  Snapshot-only values are placed on the latest row; unavailable historical
+  measurements remain missing. Exercise history is not available from the UI,
+  so Python bone and muscle domains report `NO_DATA` for that input.
 - The Python report is computed on demand and is not a persistent medical
   record.
 - Local demo state is held in memory for the signed-in session. A page reload or

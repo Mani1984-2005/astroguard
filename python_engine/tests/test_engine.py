@@ -6,8 +6,11 @@ Run from the repository root:
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 
 import pandas as pd
@@ -18,6 +21,7 @@ if ENGINE_DIR not in sys.path:
     sys.path.insert(0, ENGINE_DIR)
 
 import astronaut_health as engine  # noqa: E402
+import bone_health as bone  # noqa: E402
 
 
 def base_log(days: int = 21) -> pd.DataFrame:
@@ -136,6 +140,116 @@ class EngineTests(unittest.TestCase):
         second = self.monitor.analyze(log)
         self.assertEqual(first["readiness"], second["readiness"])
         self.assertEqual(first["condition"], second["condition"])
+
+
+class BoneModelPersistenceTests(unittest.TestCase):
+    def test_model_round_trip_preserves_parameters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "bone-model.json")
+            original = bone.BoneHealthModel(
+                target_load=42.5,
+                max_monthly_loss_pct=1.2,
+                memory_days=8,
+                metrics={"training_data": "SIMULATED"},
+            )
+            original.save(path)
+
+            restored = bone.BoneHealthModel.load_or_train(path)
+
+            self.assertEqual(restored.target_load, original.target_load)
+            self.assertEqual(
+                restored.max_monthly_loss_pct, original.max_monthly_loss_pct
+            )
+            self.assertEqual(restored.memory_days, original.memory_days)
+            self.assertEqual(restored.metrics, original.metrics)
+
+    def test_missing_model_uses_and_persists_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "missing-model.json")
+
+            model = bone.BoneHealthModel.load_or_train(path)
+
+            self.assertEqual(model.target_load, bone.TARGET_LOAD)
+            self.assertEqual(model.max_monthly_loss_pct, bone.MAX_MONTHLY_LOSS_PCT)
+            self.assertEqual(model.memory_days, bone.LOAD_MEMORY_DAYS)
+            self.assertTrue(os.path.isfile(path))
+
+    def test_malformed_and_invalid_models_fall_back_to_defaults(self):
+        invalid_payloads = (
+            "{not json",
+            "[]",
+            json.dumps({"target_load": 0}),
+            json.dumps({"max_monthly_loss_pct": -1}),
+            json.dumps({"memory_days": 2.5}),
+            json.dumps({"metrics": []}),
+            '{"target_load": NaN}',
+            '{"target_load": ' + ("9" * 5000) + "}",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for index, content in enumerate(invalid_payloads):
+                with self.subTest(payload=content):
+                    path = os.path.join(directory, f"invalid-{index}.json")
+                    with open(path, "w", encoding="utf-8") as handle:
+                        handle.write(content)
+
+                    model = bone.BoneHealthModel.load_or_train(path)
+
+                    self.assertEqual(model.target_load, bone.TARGET_LOAD)
+                    self.assertEqual(
+                        model.max_monthly_loss_pct, bone.MAX_MONTHLY_LOSS_PCT
+                    )
+                    self.assertEqual(model.memory_days, bone.LOAD_MEMORY_DAYS)
+                    with open(path, "r", encoding="utf-8") as handle:
+                        self.assertIsInstance(json.load(handle), dict)
+
+    def test_unavailable_model_storage_does_not_block_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "missing-directory", "bone-model.json")
+
+            model = bone.BoneHealthModel.load_or_train(path)
+
+            self.assertEqual(model.target_load, bone.TARGET_LOAD)
+            self.assertFalse(os.path.exists(os.path.dirname(path)))
+
+    def test_invalid_runtime_parameters_are_rejected(self):
+        for kwargs in (
+            {"target_load": 0},
+            {"target_load": float("nan")},
+            {"max_monthly_loss_pct": -1},
+            {"memory_days": 0},
+            {"memory_days": 1.5},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    bone.BoneHealthModel(**kwargs)
+
+
+class BridgeProtocolTests(unittest.TestCase):
+    def test_worker_handles_json_lines_errors_and_eof(self):
+        requests = (
+            '{"id":"health-1","action":"health","payload":{}}\n'
+            '{"id":"bad-1","action":"unknown","payload":{}}\n'
+            '{malformed\n'
+        )
+        result = subprocess.run(
+            [sys.executable, os.path.join(ENGINE_DIR, "bridge.py")],
+            input=requests,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        messages = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(messages[0], {"ready": True, "engine": "python"})
+        self.assertEqual(messages[1]["id"], "health-1")
+        self.assertTrue(messages[1]["ok"])
+        self.assertEqual(messages[1]["result"]["engine"], "python")
+        self.assertEqual(messages[2]["id"], "bad-1")
+        self.assertFalse(messages[2]["ok"])
+        self.assertIsNone(messages[3]["id"])
+        self.assertFalse(messages[3]["ok"])
 
 
 class ApiTests(unittest.TestCase):
