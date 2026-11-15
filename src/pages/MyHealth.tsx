@@ -25,6 +25,7 @@ import {
   HealthHistoryRecord,
   HealthIndicatorKey,
   HealthStatusLevel,
+  PythonHealthReport,
   ResearchEvidenceItem,
   TelemetryTimeframeSeries,
   TelemetryVitalsSnapshot,
@@ -34,6 +35,7 @@ import { formatVitalReading } from '../engine/healthEvaluationEngine';
 import { AstronautPortrait } from '../components/common/AstronautPortrait';
 import { LiveEcgMonitor } from '../components/common/LiveEcgMonitor';
 import { TelemetryLineChart } from '../components/common/TelemetryLineChart';
+import { PythonHealthPanel } from '../components/common/PythonHealthPanel';
 
 interface MyHealthProps {
   crewProfile: CrewProfile;
@@ -47,6 +49,9 @@ interface MyHealthProps {
   countermeasures: CountermeasureItem[];
   healthHistory: HealthHistoryRecord[];
   researchItems: ResearchEvidenceItem[];
+  pythonReport?: PythonHealthReport | null;
+  pythonLoading?: boolean;
+  pythonError?: string | null;
   hasUnacknowledgedCriticalAlert?: boolean;
   onOpenEmergencyAlert?: () => void;
 }
@@ -102,6 +107,9 @@ export function MyHealth({
   countermeasures,
   healthHistory,
   researchItems,
+  pythonReport = null,
+  pythonLoading = false,
+  pythonError = null,
   hasUnacknowledgedCriticalAlert = false,
   onOpenEmergencyAlert
 }: MyHealthProps) {
@@ -403,6 +411,14 @@ export function MyHealth({
             </div>
           )}
         </section>
+
+        {/* 1A. PYTHON ENGINE READINESS (additive, deterministic, simulated) */}
+        <PythonHealthPanel
+          report={pythonReport}
+          loading={pythonLoading}
+          error={pythonError}
+          title="ASTRONAUT READINESS · PYTHON ENGINE"
+        />
 
         {/* 1B. LIVE ECG WAVEFORM */}
         <div className="rounded-2xl ag-surface-primary p-4 sm:p-5 flex flex-col justify-center">

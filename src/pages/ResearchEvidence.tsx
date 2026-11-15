@@ -24,11 +24,11 @@ export function ResearchEvidence({
             AEROSPACE MEDICINE EVIDENCE INDEX
           </span>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-white mt-0.5">
-            Research & Clinical Evidence
+            Research & Evidence Context
           </h1>
           <p className="text-sm text-slate-300 mt-1">
-            Peer-reviewed human spaceflight physiological research informing AstroGuard telemetry
-            thresholds.
+            Contextual human spaceflight research summaries. AstroGuard telemetry thresholds are
+            prototype demonstration rules, not clinical guidelines or a formal evidence review.
           </p>
         </div>
 
@@ -86,7 +86,7 @@ export function ResearchEvidence({
 
           <div className="space-y-2.5">
             <h3 className="text-xs font-mono uppercase tracking-wider text-sky-400">
-              Operational Flight Medicine Countermeasures
+              Contextual Countermeasure Considerations
             </h3>
             <div className="space-y-2.5">
               {activeBrief.implications.map((imp, idx) => (
@@ -100,6 +100,11 @@ export function ResearchEvidence({
               ))}
             </div>
           </div>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Program-level topic references only. No article-level citation, DOI, NASA endorsement,
+            clinical validation, or formal evidence grade is asserted. Confirm current NASA
+            standards before operational use.
+          </p>
         </div>
       </section>
     </div>

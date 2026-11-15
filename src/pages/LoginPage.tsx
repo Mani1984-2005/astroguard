@@ -33,6 +33,14 @@ import {
 export type LoginPortalChoice = 'ASTRONAUT' | 'MEDICAL_CHIEF';
 export type LoginScreenStage = 'PORTAL_SELECT' | 'CREW_SELECT' | 'MEDICAL_CHIEF_LOGIN';
 
+function formatCrewRole(profile: CrewSelectionProfile): string {
+  const rank = profile.rank?.trim() || '';
+  const role = profile.missionRole?.trim() || '';
+  if (!rank) return role || 'Flight Crew';
+  if (!role || role.toLowerCase().includes(rank.toLowerCase())) return role || rank;
+  return `${rank} · ${role}`;
+}
+
 interface LoginPageProps {
   stage: LoginScreenStage;
   onChangeStage: (stage: LoginScreenStage) => void;
@@ -342,11 +350,11 @@ export function LoginPage({
                         <span className="text-slate-600">·</span>
                         <span className="text-slate-400 uppercase">{profile.flightDay}</span>
                       </div>
-                      <h2 className="font-display text-base sm:text-lg font-bold text-white truncate">
+                      <h2 className="font-display text-base sm:text-lg font-bold text-white leading-snug">
                         {profile.name}
                       </h2>
-                      <p className="text-sm text-slate-300 truncate">
-                        {profile.rank} · {profile.missionRole}
+                      <p className="text-sm text-slate-300 leading-snug">
+                        {formatCrewRole(profile)}
                       </p>
                     </div>
                   </div>

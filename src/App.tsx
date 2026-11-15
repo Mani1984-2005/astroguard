@@ -34,6 +34,7 @@ import {
   HealthIndicatorKey,
   ModuleId,
   ProvisionedAccount,
+  PythonHealthReport,
   SimulationScenarioId,
   TelemetryVitalsSnapshot,
   TimeframeKey,
@@ -76,6 +77,7 @@ import {
   EmergencyAlertModal
 } from './components/common/EmergencyAlertModal';
 import { SimulationControlPanel } from './components/common/SimulationControlPanel';
+import { analyzeHealthWithPython } from './services/pythonHealthService';
 import { AccessDeniedView } from './components/common/AccessDeniedView';
 import { AstroGuardBackdrop } from './components/three/AstroGuardBackdrop';
 import {
@@ -210,6 +212,9 @@ export default function App() {
     SIMULATION_SCENARIOS.SAFE.vitals
   );
   const [activeHrv, setActiveHrv] = useState<number>(64);
+  const [pythonHealthReport, setPythonHealthReport] = useState<PythonHealthReport | null>(null);
+  const [pythonHealthLoading, setPythonHealthLoading] = useState(false);
+  const [pythonHealthError, setPythonHealthError] = useState<string | null>(null);
   const [vitalsHistoryWindow, setVitalsHistoryWindow] = useState<TelemetryVitalsSnapshot[]>([
     SIMULATION_SCENARIOS.SAFE.vitals,
     SIMULATION_SCENARIOS.SAFE.vitals
@@ -268,6 +273,9 @@ export default function App() {
     setHealthHistory(HEALTH_HISTORY_RECORDS);
     setActiveVitals(SIMULATION_SCENARIOS.SAFE.vitals);
     setActiveScenario('SAFE');
+    setPythonHealthReport(null);
+    setPythonHealthError(null);
+    setPythonHealthLoading(false);
     sessionLoggedUidRef.current = null;
     autoSeedAttemptedRef.current = false;
   }, []);
@@ -464,7 +472,8 @@ export default function App() {
     (
       crewId: string,
       astronautName: string,
-      evalRes: ReturnType<typeof evaluateCrewHealth>
+      evalRes: ReturnType<typeof evaluateCrewHealth>,
+      previousReadingOverride?: string
     ): HealthAlert | null => {
       if (evalRes.status !== 'CAUTION' && evalRes.status !== 'DANGER') return null;
       const primary = evalRes.primaryFinding;
@@ -478,7 +487,8 @@ export default function App() {
         newStatus: evalRes.status,
         severity: evalRes.status === 'DANGER' ? 'CRITICAL' : 'CAUTION',
         currentReading: primary?.formattedReading ?? 'Simulated Excursion',
-        previousReading: primary?.previousReading ?? 'Baseline Nominal',
+        previousReading:
+          previousReadingOverride ?? primary?.previousReading ?? 'Baseline Nominal',
         timestamp: `FD-084 • ${new Date().toISOString().slice(11, 19)} UTC`,
         acknowledged: false,
         acknowledgedBy: null,
@@ -846,6 +856,71 @@ export default function App() {
     [activeVitals, vitalsHistoryWindow, evaluationRules]
   );
 
+  const selectedCrewCountermeasures =
+    crewCountermeasuresMap[selectedCrewId] && crewCountermeasuresMap[selectedCrewId].length > 0
+      ? crewCountermeasuresMap[selectedCrewId]
+      : countermeasures;
+
+  // Python engine is an additive authoritative readiness layer. The synchronous
+  // TypeScript evaluation remains the fallback if the bridge is unavailable.
+  useEffect(() => {
+    if (!activeSessionProfile || activeSessionProfile.accountStatus !== 'ACTIVE') {
+      setPythonHealthReport(null);
+      setPythonHealthError(null);
+      setPythonHealthLoading(false);
+      return;
+    }
+    const targetCrewId =
+      activeSessionProfile.role === 'ASTRONAUT'
+        ? activeSessionProfile.crewId
+        : selectedCrewId || 'AG-LEO-01';
+    let cancelled = false;
+    setPythonHealthReport(null);
+    setPythonHealthError(null);
+    setPythonHealthLoading(true);
+    const timer = setTimeout(() => {
+      void analyzeHealthWithPython({
+        crewId: targetCrewId,
+        crewProfile: personalCrewProfile,
+        vitals: activeVitals,
+        series: crewTelemetrySeries,
+        countermeasures:
+          activeSessionProfile.role === 'MEDICAL_CHIEF'
+            ? selectedCrewCountermeasures
+            : countermeasures
+      }).then((result) => {
+        if (cancelled) return;
+        setPythonHealthLoading(false);
+        if (result.ok && result.report) {
+          setPythonHealthReport(result.report);
+          setPythonHealthError(null);
+        } else {
+          setPythonHealthReport(null);
+          setPythonHealthError(result.error || 'Python engine unavailable.');
+        }
+      }).catch((error: unknown) => {
+        if (cancelled) return;
+        setPythonHealthLoading(false);
+        setPythonHealthReport(null);
+        setPythonHealthError(
+          error instanceof Error ? error.message : 'Python engine unavailable.'
+        );
+      });
+    }, 600);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    activeSessionProfile,
+    selectedCrewId,
+    personalCrewProfile,
+    activeVitals,
+    crewTelemetrySeries,
+    countermeasures,
+    selectedCrewCountermeasures
+  ]);
+
   // Auth & Crew Profile Selection Actions
   const handleChangeLoginStage = (nextStage: LoginScreenStage) => {
     setLoginStage(nextStage);
@@ -928,12 +1003,12 @@ export default function App() {
   }, []);
 
   const initializeServerChiefWorkspaceState = useCallback(
-    (navigateToChiefWorkspace: boolean) => {
+    (navigateToChiefWorkspace: boolean, forceReset = false) => {
       const seededRoster: CrewRosterMember[] = CREW_ROSTER_DATA.map((member) => ({
         ...member,
         notes: [...member.notes]
       }));
-      setCrewRoster((prev) => (prev.length > 0 ? prev : seededRoster));
+      setCrewRoster((prev) => (forceReset || prev.length === 0 ? seededRoster : prev));
 
       const initialCrewAlerts: HealthAlert[] = [];
       for (const member of seededRoster) {
@@ -941,7 +1016,7 @@ export default function App() {
         const generated = buildSimAlertForCrew(member.id, member.name, evalRes);
         if (generated) initialCrewAlerts.push(generated);
       }
-      setAlerts((prev) => (prev.length > 0 ? prev : initialCrewAlerts));
+      setAlerts((prev) => (forceReset || prev.length === 0 ? initialCrewAlerts : prev));
       setAccessDenied(null);
       setPortalMismatchMessage(null);
       void fetchServerAuditLogs();
@@ -1217,7 +1292,17 @@ export default function App() {
         return nextList;
       });
 
-      const createdAlert = buildSimAlertForCrew(targetCrewId, targetName, nextEval);
+      const previousEval = evaluateCrewHealth(activeVitals, [activeVitals], evaluationRules);
+      const previousReading = nextEval.primaryFinding
+        ? previousEval.findings.find((finding) => finding.key === nextEval.primaryFinding?.key)
+            ?.formattedReading
+        : undefined;
+      const createdAlert = buildSimAlertForCrew(
+        targetCrewId,
+        targetName,
+        nextEval,
+        previousReading
+      );
       if (createdAlert) {
         setAlerts((prev) => {
           const exists = prev.some(
@@ -1266,6 +1351,16 @@ export default function App() {
     const preset = SIMULATION_SCENARIOS[scenarioId];
     const member = crewRoster.find((c) => c.id === crewId) || CREW_ROSTER_DATA.find((c) => c.id === crewId);
     const nextEval = evaluateCrewHealth(preset.vitals, [preset.vitals], evaluationRules);
+    const previousVitals = member?.vitals ?? activeVitals;
+    const previousEval = evaluateCrewHealth(
+      previousVitals,
+      [previousVitals],
+      evaluationRules
+    );
+    const previousReading = nextEval.primaryFinding
+      ? previousEval.findings.find((finding) => finding.key === nextEval.primaryFinding?.key)
+          ?.formattedReading
+      : undefined;
     const nextHrv = scenarioId === 'DANGER' ? 36 : scenarioId === 'CAUTION' ? 44 : 64;
 
     if (isServerChiefSession) {
@@ -1293,7 +1388,12 @@ export default function App() {
         setActiveScenario(scenarioId);
         setActiveHrv(nextHrv);
       }
-      const createdAlert = buildSimAlertForCrew(crewId, member?.name || crewId, nextEval);
+      const createdAlert = buildSimAlertForCrew(
+        crewId,
+        member?.name || crewId,
+        nextEval,
+        previousReading
+      );
       if (createdAlert) {
         setAlerts((prev) => {
           const exists = prev.some(
@@ -1577,11 +1677,6 @@ export default function App() {
   const effectiveCrewRoster =
     crewRoster.length > 0 ? crewRoster : CREW_ROSTER_DATA;
 
-  const selectedCrewCountermeasures =
-    crewCountermeasuresMap[selectedCrewId] && crewCountermeasuresMap[selectedCrewId].length > 0
-      ? crewCountermeasuresMap[selectedCrewId]
-      : countermeasures;
-
   const isMedicalChief = activeSessionProfile?.role === 'MEDICAL_CHIEF';
 
   let pageView: React.ReactNode;
@@ -1717,7 +1812,7 @@ export default function App() {
                 onClick={handleGoHome}
                 aria-label="Go to Home"
                 title="Home Dashboard"
-                className={`ag-nav-3d inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                className={`ag-nav-3d hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                   activePage === homePageId && !accessDenied
                     ? 'bg-[#105BD8]/25 border-[#38BDF8]/50 text-white'
                     : 'ag-surface-inset hover:border-sky-400/35 text-slate-200 hover:text-white'
@@ -1769,7 +1864,9 @@ export default function App() {
                 }`}
                 aria-hidden="true"
               />
-              <span>{isMedicalChief ? 'MEDICAL CHIEF' : activeSessionProfile.crewId}</span>
+              <span className="hidden sm:inline">
+                {isMedicalChief ? 'MEDICAL CHIEF' : activeSessionProfile.crewId}
+              </span>
             </div>
           </div>
         </header>
@@ -1866,6 +1963,9 @@ export default function App() {
                   countermeasures={isMedicalChief ? selectedCrewCountermeasures : countermeasures}
                   healthHistory={healthHistory}
                   researchItems={RESEARCH_EVIDENCE_ITEMS}
+                  pythonReport={pythonHealthReport}
+                  pythonLoading={pythonHealthLoading}
+                  pythonError={pythonHealthError}
                   hasUnacknowledgedCriticalAlert={Boolean(activeUnacknowledgedCriticalAlert)}
                   onOpenEmergencyAlert={() => {
                     if (isMedicalChief && activeUnacknowledgedCriticalAlert) {
@@ -1929,12 +2029,16 @@ export default function App() {
                   countermeasures={selectedCrewCountermeasures}
                   researchItems={RESEARCH_EVIDENCE_ITEMS}
                   isFirestoreSeeded={crewRoster.length > 0}
+                  isLocalDemoSession={isServerChiefSession}
                   provisionedAccounts={provisionedAccounts}
                   registeredUsers={registeredUsers}
                   auditLogs={auditLogs}
+                  pythonReport={pythonHealthReport}
+                  pythonLoading={pythonHealthLoading}
+                  pythonError={pythonHealthError}
                   onSeedFourCrewDataset={async () => {
                     if (isServerChiefSession) {
-                      initializeServerChiefWorkspaceState(false);
+                      initializeServerChiefWorkspaceState(false, true);
                       return;
                     }
                     await seedFourCrewMissionDataset({
@@ -2021,7 +2125,9 @@ export default function App() {
                 <p className="text-xs text-slate-400">
                   {isSimulationSession
                     ? 'Trigger simulated SAFE, CAUTION, DANGER, or sensor-loss states isolated to this simulated crew session.'
-                    : 'Trigger simulated SAFE, CAUTION, DANGER, or sensor-loss states persisted to Firestore.'}
+                    : isServerChiefSession
+                      ? 'Trigger simulated SAFE, CAUTION, DANGER, or sensor-loss states in this local demo workspace. No Firestore write occurs.'
+                      : 'Trigger simulated SAFE, CAUTION, DANGER, or sensor-loss states persisted to Firestore.'}
                 </p>
               </div>
               <button

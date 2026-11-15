@@ -384,6 +384,18 @@ export function getTelemetrySeriesForCrew(
       hr: [...TELEMETRY_SERIES['24H'].hr.slice(0, 6), hrNow ?? 68],
       spo2: [...TELEMETRY_SERIES['24H'].spo2.slice(0, 6), spo2Now ?? 98],
       temp: [...TELEMETRY_SERIES['24H'].temp.slice(0, 6), tempNow ?? 36.8]
+    },
+    '7D': {
+      ...TELEMETRY_SERIES['7D'],
+      hr: [...TELEMETRY_SERIES['7D'].hr.slice(0, 6), hrNow ?? 68],
+      spo2: [...TELEMETRY_SERIES['7D'].spo2.slice(0, 6), spo2Now ?? 98],
+      temp: [...TELEMETRY_SERIES['7D'].temp.slice(0, 6), tempNow ?? 36.8]
+    },
+    '30D': {
+      ...TELEMETRY_SERIES['30D'],
+      hr: [...TELEMETRY_SERIES['30D'].hr.slice(0, 3), hrNow ?? 68],
+      spo2: [...TELEMETRY_SERIES['30D'].spo2.slice(0, 3), spo2Now ?? 98],
+      temp: [...TELEMETRY_SERIES['30D'].temp.slice(0, 3), tempNow ?? 36.8]
     }
   };
 }
@@ -514,7 +526,7 @@ export const RESEARCH_EVIDENCE_ITEMS: ResearchEvidenceItem[] = [
       'Lower Body Negative Pressure (LBNP) countermeasures evaluated for fluid unloading.',
       'B-vitamin status and one-carbon metabolism genetic screening prior to mission assignment.'
     ],
-    evidenceGrade: 'Level I Clinical Aerospace Evidence'
+    evidenceGrade: 'Contextual review (not a formal grade)'
   },
   {
     id: 'cardio',
@@ -529,7 +541,7 @@ export const RESEARCH_EVIDENCE_ITEMS: ResearchEvidenceItem[] = [
       'End-of-mission oral fluid-loading protocols mitigate post-landing orthostatic hypotension.',
       'Continuous R-R interval HRV tracking detects autonomic fatigue prior to EVA.'
     ],
-    evidenceGrade: 'Level I Clinical Aerospace Evidence'
+    evidenceGrade: 'Contextual review (not a formal grade)'
   },
   {
     id: 'musculo',
@@ -544,7 +556,7 @@ export const RESEARCH_EVIDENCE_ITEMS: ResearchEvidenceItem[] = [
       '800 IU daily cholecalciferol supplementation throughout orbital stay.',
       'Track urinary N-telopeptide (NTX) excretion trends at 30-day intervals.'
     ],
-    evidenceGrade: 'Level I Clinical Aerospace Evidence'
+    evidenceGrade: 'Contextual review (not a formal grade)'
   },
   {
     id: 'radiation',
@@ -559,7 +571,7 @@ export const RESEARCH_EVIDENCE_ITEMS: ResearchEvidenceItem[] = [
       'Cumulative career effective dose tracked strictly below 600 mSv NASA lifetime limit.',
       'Antioxidant-rich nutrition protocols maintained across long-duration increments.'
     ],
-    evidenceGrade: 'Operational Flight Rule Standard'
+    evidenceGrade: 'Program reference (not a flight rule)'
   }
 ];
 

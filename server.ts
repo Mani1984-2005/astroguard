@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
@@ -37,6 +38,145 @@ interface SignedChiefSessionPayload {
   iat: number;
   exp: number;
 }
+
+interface ApiActor {
+  role: 'ASTRONAUT' | 'MEDICAL_CHIEF';
+  crewId: string;
+  userId: string;
+  email: string;
+  source: 'CHIEF_COOKIE' | 'CREW_COOKIE' | 'FIREBASE_BEARER';
+}
+
+interface PythonBridgeResponse {
+  id?: string;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+}
+
+interface PendingBridgeRequest {
+  resolve: (value: unknown) => void;
+  reject: (reason: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+class PythonHealthBridge {
+  private child: ChildProcessWithoutNullStreams | null = null;
+  private buffer = '';
+  private readyPromise: Promise<void> | null = null;
+  private readyResolve: (() => void) | null = null;
+  private readyReject: ((reason: Error) => void) | null = null;
+  private seq = 0;
+  private pending = new Map<string, PendingBridgeRequest>();
+
+  private ensureStarted(): Promise<void> {
+    if (this.readyPromise) return this.readyPromise;
+    const script = path.resolve(process.cwd(), 'python_engine', 'bridge.py');
+    if (!fs.existsSync(script)) {
+      return Promise.reject(new Error('Python health bridge is not installed.'));
+    }
+    const executable = process.env.PYTHON_EXECUTABLE?.trim() || 'python';
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
+    const child = spawn(executable, [script], {
+      cwd: process.cwd(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+    this.child = child;
+
+    const startupTimer = setTimeout(() => {
+      this.readyReject?.(new Error('Python health bridge startup timed out.'));
+      this.reset();
+    }, 45_000);
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => this.onStdout(chunk, startupTimer));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      console.error('[AstroGuard Python]', chunk.trim().slice(0, 500));
+    });
+    child.on('error', (error) => {
+      clearTimeout(startupTimer);
+      this.failAll(new Error(`Unable to start Python health engine: ${error.message}`));
+      this.reset();
+    });
+    child.on('exit', (code) => {
+      clearTimeout(startupTimer);
+      this.failAll(new Error(`Python health engine exited (code ${code ?? 'unknown'}).`));
+      this.reset();
+    });
+    return this.readyPromise;
+  }
+
+  private onStdout(chunk: string, startupTimer: NodeJS.Timeout): void {
+    this.buffer += chunk;
+    let newline = this.buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = this.buffer.slice(0, newline).trim();
+      this.buffer = this.buffer.slice(newline + 1);
+      newline = this.buffer.indexOf('\n');
+      if (!line) continue;
+      let message: PythonBridgeResponse & { ready?: boolean };
+      try {
+        message = JSON.parse(line) as PythonBridgeResponse & { ready?: boolean };
+      } catch {
+        continue;
+      }
+      if (message.ready) {
+        clearTimeout(startupTimer);
+        this.readyResolve?.();
+        this.readyResolve = null;
+        this.readyReject = null;
+        continue;
+      }
+      if (!message.id) continue;
+      const pending = this.pending.get(message.id);
+      if (!pending) continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(message.id);
+      if (message.ok) pending.resolve(message.result);
+      else pending.reject(new Error(message.error || 'Python health engine error.'));
+    }
+  }
+
+  private reset(): void {
+    this.child = null;
+    this.readyPromise = null;
+    this.readyResolve = null;
+    this.readyReject = null;
+    this.buffer = '';
+  }
+
+  private failAll(error: Error): void {
+    for (const [, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    this.readyReject?.(error);
+  }
+
+  async request(action: string, payload: Record<string, unknown>): Promise<unknown> {
+    await this.ensureStarted();
+    const child = this.child;
+    if (!child) throw new Error('Python health engine is unavailable.');
+    const id = `${Date.now()}_${++this.seq}`;
+    const response = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error('Python health engine request timed out.'));
+      }, 30_000);
+      this.pending.set(id, { resolve, reject, timer });
+    });
+    child.stdin.write(JSON.stringify({ id, action, payload }) + '\n');
+    return response;
+  }
+}
+
+const pythonHealthBridge = new PythonHealthBridge();
 
 interface ProvisionedChiefRecord {
   userId: string;
@@ -464,10 +604,101 @@ function getVerifiedChiefSession(req: Request): SignedChiefSessionPayload | null
   return verified;
 }
 
+function getVerifiedCrewSession(req: Request): SignedCrewSessionPayload | null {
+  const cookies = parseCookies(req);
+  const token = cookies['astroguard_crew_session'];
+  if (!token) return null;
+  const verified = verifySessionToken<SignedCrewSessionPayload>(token);
+  if (
+    !verified ||
+    verified.role !== 'ASTRONAUT' ||
+    verified.mode !== 'SIMULATION_CREW' ||
+    !ALLOWED_CREW_IDS.has(verified.crewId)
+  ) {
+    return null;
+  }
+  return verified;
+}
+
+async function getApiActor(req: Request): Promise<ApiActor | null> {
+  const chief = getVerifiedChiefSession(req);
+  if (chief) {
+    return {
+      role: 'MEDICAL_CHIEF',
+      crewId: chief.crewId,
+      userId: chief.uid,
+      email: chief.email,
+      source: 'CHIEF_COOKIE'
+    };
+  }
+
+  const crew = getVerifiedCrewSession(req);
+  if (crew) {
+    return {
+      role: 'ASTRONAUT',
+      crewId: crew.crewId,
+      userId: `SIM_${crew.crewId}`,
+      email: '',
+      source: 'CREW_COOKIE'
+    };
+  }
+
+  const authorization = req.headers.authorization;
+  if (adminAuth && adminDb && authorization?.startsWith('Bearer ')) {
+    try {
+      const decoded = await adminAuth.verifyIdToken(authorization.slice(7).trim());
+      if (decoded.email_verified !== true) {
+        return null;
+      }
+      const email = (decoded.email || '').trim().toLowerCase();
+      if (email === BOOTSTRAPPED_CHIEF_EMAIL) {
+        return {
+          role: 'MEDICAL_CHIEF',
+          crewId: 'MCC-ALL',
+          userId: decoded.uid,
+          email,
+          source: 'FIREBASE_BEARER'
+        };
+      }
+      const userSnap = await adminDb.collection('users').doc(decoded.uid).get();
+      const data = userSnap.data();
+      if (
+        userSnap.exists &&
+        data?.accountStatus === 'ACTIVE' &&
+        (data?.role === 'ASTRONAUT' || data?.role === 'MEDICAL_CHIEF') &&
+        typeof data?.crewId === 'string'
+      ) {
+        return {
+          role: data.role,
+          crewId: data.role === 'MEDICAL_CHIEF' ? 'MCC-ALL' : data.crewId,
+          userId: decoded.uid,
+          email,
+          source: 'FIREBASE_BEARER'
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function denyUnauthorized(req: Request, res: Response): void {
+  appendSecurityAudit({
+    eventType: 'HEALTH_API_DENIED',
+    actor: 'UNAUTHENTICATED',
+    target: req.path,
+    outcome: 'DENIED',
+    ip: getClientIp(req),
+    details: 'Health API request rejected: no valid crew, chief or Firebase bearer session.'
+  });
+  res.status(401).json({ ok: false, error: 'Authentication required for health data.' });
+}
+
 async function startServer(): Promise<void> {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '16kb' }));
+  app.use(express.json({ limit: '128kb' }));
 
   // Block direct HTTP access to server-side secrets, auth store, scripts, or rules files
   app.use((req: Request, res: Response, next) => {
@@ -476,6 +707,7 @@ async function startServer(): Promise<void> {
       normalizedPath.startsWith('/server-data') ||
       normalizedPath.startsWith('/.astroguard-server') ||
       normalizedPath.startsWith('/scripts') ||
+      normalizedPath.startsWith('/python_engine') ||
       normalizedPath.startsWith('/.env') ||
       normalizedPath === '/server.ts' ||
       normalizedPath === '/firestore.rules' ||
@@ -991,6 +1223,166 @@ async function startServer(): Promise<void> {
       details: 'Session cookies cleared.'
     });
     res.json({ ok: true });
+  });
+
+  // ==========================================================================
+  // PYTHON HEALTH ENGINE API (TypeScript backend is the only boundary)
+  // ==========================================================================
+  app.get('/api/health/parameters', async (req: Request, res: Response) => {
+    const actor = await getApiActor(req);
+    if (!actor) return denyUnauthorized(req, res);
+    try {
+      const result = await pythonHealthBridge.request('parameters', {});
+      res.json({ ok: true, actorRole: actor.role, ...(result as object) });
+    } catch (error) {
+      res.status(503).json({
+        ok: false,
+        error: 'Python health engine is unavailable. The TypeScript fallback remains active.',
+        detail: error instanceof Error ? error.message : 'Unknown bridge error.'
+      });
+    }
+  });
+
+  app.get('/api/health/engine-status', async (req: Request, res: Response) => {
+    const actor = await getApiActor(req);
+    if (!actor) return denyUnauthorized(req, res);
+    if (actor.role !== 'MEDICAL_CHIEF') {
+      res.status(403).json({ ok: false, error: 'Medical Chief authorization required.' });
+      return;
+    }
+    try {
+      const result = await pythonHealthBridge.request('health', {});
+      res.json({ ok: true, ...(result as object) });
+    } catch (error) {
+      res.status(503).json({
+        ok: false,
+        error: 'Python health engine is unavailable.',
+        detail: error instanceof Error ? error.message : 'Unknown bridge error.'
+      });
+    }
+  });
+
+  app.post('/api/health/analyze', async (req: Request, res: Response) => {
+    const ip = getClientIp(req);
+    const actor = await getApiActor(req);
+    if (!actor) return denyUnauthorized(req, res);
+
+    const body = (req.body || {}) as {
+      crewId?: unknown;
+      logs?: unknown;
+      priorCareerMsv?: unknown;
+      countermeasureStatus?: unknown;
+    };
+    const requestedCrewId = typeof body.crewId === 'string' ? body.crewId.trim().toUpperCase() : '';
+    const crewId = actor.role === 'ASTRONAUT' ? actor.crewId : requestedCrewId;
+
+    if (!/^AG-LEO-[0-9]{2}$/.test(crewId)) {
+      res.status(400).json({ ok: false, error: 'A valid crewId is required.' });
+      return;
+    }
+    if (actor.role === 'ASTRONAUT' && requestedCrewId && requestedCrewId !== actor.crewId) {
+      appendSecurityAudit({
+        eventType: 'HEALTH_API_CROSS_CREW_DENIED',
+        actor: actor.userId,
+        target: `crew/${requestedCrewId}/health`,
+        outcome: 'DENIED',
+        ip,
+        details: `Astronaut ${actor.crewId} attempted Python health analysis for ${requestedCrewId}.`
+      });
+      res.status(403).json({
+        ok: false,
+        error: 'Strict crew isolation: you may only analyze your own health data.'
+      });
+      return;
+    }
+
+    if (!Array.isArray(body.logs) || body.logs.length < 3 || body.logs.length > 120) {
+      res.status(400).json({
+        ok: false,
+        error: 'logs must contain between 3 and 120 daily observation objects.'
+      });
+      return;
+    }
+    if (body.logs.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) {
+      res.status(400).json({ ok: false, error: 'Each daily observation must be an object.' });
+      return;
+    }
+
+    const priorCareerMsv =
+      typeof body.priorCareerMsv === 'number' && Number.isFinite(body.priorCareerMsv)
+        ? Math.max(0, Math.min(600, body.priorCareerMsv))
+        : 0;
+
+    try {
+      const result = await pythonHealthBridge.request('analyze', {
+        crewId,
+        logs: body.logs,
+        priorCareerMsv,
+        countermeasureStatus:
+          body.countermeasureStatus && typeof body.countermeasureStatus === 'object'
+            ? body.countermeasureStatus
+            : undefined
+      });
+      appendSecurityAudit({
+        eventType: 'HEALTH_API_ANALYZE',
+        actor: actor.userId,
+        target: `crew/${crewId}/python-health`,
+        outcome: 'ALLOWED',
+        ip,
+        details: `Python health analysis served to ${actor.role} (${actor.source}).`
+      });
+      res.json({ ok: true, crewId, actorRole: actor.role, report: result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown bridge error.';
+      appendSecurityAudit({
+        eventType: 'HEALTH_API_ANALYZE_FAILED',
+        actor: actor.userId,
+        target: `crew/${crewId}/python-health`,
+        outcome: 'DENIED',
+        ip,
+        details: message.slice(0, 300)
+      });
+      res.status(422).json({ ok: false, error: message });
+    }
+  });
+
+  app.post('/api/health/simulate', async (req: Request, res: Response) => {
+    const actor = await getApiActor(req);
+    if (!actor) return denyUnauthorized(req, res);
+    if (actor.role !== 'MEDICAL_CHIEF') {
+      res.status(403).json({
+        ok: false,
+        error: 'Medical Chief authorization required for simulation scenarios.'
+      });
+      return;
+    }
+    const body = (req.body || {}) as { profile?: unknown; days?: unknown; seed?: unknown };
+    const profile = typeof body.profile === 'string' ? body.profile : 'healthy';
+    const days =
+      typeof body.days === 'number' && Number.isFinite(body.days)
+        ? Math.max(3, Math.min(180, Math.floor(body.days)))
+        : 30;
+    const seed =
+      typeof body.seed === 'number' && Number.isFinite(body.seed)
+        ? Math.max(0, Math.floor(body.seed))
+        : 0;
+    try {
+      const result = await pythonHealthBridge.request('simulate', { profile, days, seed });
+      appendSecurityAudit({
+        eventType: 'HEALTH_API_SIMULATE',
+        actor: actor.userId,
+        target: 'python-engine/simulate',
+        outcome: 'ALLOWED',
+        ip: getClientIp(req),
+        details: `Medical Chief generated simulated profile ${profile} (${days} days, seed ${seed}).`
+      });
+      res.json({ ok: true, ...(result as object) });
+    } catch (error) {
+      res.status(422).json({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Simulation failed.'
+      });
+    }
   });
 
   // Vite dev middleware or production static assets

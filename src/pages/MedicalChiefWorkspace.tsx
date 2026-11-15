@@ -25,6 +25,7 @@ import {
   HealthIndicatorKey,
   HealthStatusLevel,
   ProvisionedAccount,
+  PythonHealthReport,
   ResearchEvidenceItem,
   SimulationScenarioId,
   TelemetryTimeframeSeries,
@@ -40,6 +41,7 @@ import { TelemetryLineChart } from '../components/common/TelemetryLineChart';
 import { LiveEcgMonitor } from '../components/common/LiveEcgMonitor';
 import { SimulationControlPanel } from '../components/common/SimulationControlPanel';
 import { AstronautPortrait } from '../components/common/AstronautPortrait';
+import { PythonHealthPanel } from '../components/common/PythonHealthPanel';
 import {
   getAstronautIdentity,
   getTelemetrySeriesForCrew
@@ -61,9 +63,13 @@ interface MedicalChiefWorkspaceProps {
   countermeasures: CountermeasureItem[];
   researchItems: ResearchEvidenceItem[];
   isFirestoreSeeded: boolean;
+  isLocalDemoSession?: boolean;
   provisionedAccounts: ProvisionedAccount[];
   registeredUsers: UserProfile[];
   auditLogs: AuditLogEntry[];
+  pythonReport?: PythonHealthReport | null;
+  pythonLoading?: boolean;
+  pythonError?: string | null;
   onSeedFourCrewDataset: () => Promise<void>;
   onSelectScenarioForCrew: (crewId: string, scenario: SimulationScenarioId) => Promise<void>;
   onSelectCrew: (id: string) => void;
@@ -128,9 +134,13 @@ export function MedicalChiefWorkspace({
   countermeasures,
   researchItems,
   isFirestoreSeeded,
+  isLocalDemoSession = false,
   provisionedAccounts,
   registeredUsers,
   auditLogs,
+  pythonReport = null,
+  pythonLoading = false,
+  pythonError = null,
   onSeedFourCrewDataset,
   onSelectScenarioForCrew,
   onSelectCrew,
@@ -151,6 +161,7 @@ export function MedicalChiefWorkspace({
   >('TRENDS');
   const [chartTimeframe, setChartTimeframe] = useState<TimeframeKey>('24H');
   const [seeding, setSeeding] = useState(false);
+  const [seedFeedback, setSeedFeedback] = useState<string | null>(null);
 
   // Provisioning form state
   const [provEmail, setProvEmail] = useState('');
@@ -225,8 +236,16 @@ export function MedicalChiefWorkspace({
 
   const handleSeedDataset = async () => {
     setSeeding(true);
+    setSeedFeedback(null);
     try {
       await onSeedFourCrewDataset();
+      setSeedFeedback(
+        isLocalDemoSession
+          ? 'Local 4-crew demo state reloaded for this session.'
+          : 'Firestore write completed.'
+      );
+    } catch {
+      setSeedFeedback('Dataset sync failed. Check Firestore permissions or use the local demo session.');
     } finally {
       setSeeding(false);
     }
@@ -347,13 +366,29 @@ export function MedicalChiefWorkspace({
               <span>Presentation 4-Crew Simulation</span>
             </div>
             <span className="text-xs font-mono text-sky-300 shrink-0">
-              {isFirestoreSeeded ? 'FIRESTORE SYNCED' : 'READY TO SEED'}
+              {isLocalDemoSession
+                ? isFirestoreSeeded
+                  ? 'LOCAL DEMO READY'
+                  : 'LOCAL DEMO'
+                : isFirestoreSeeded
+                  ? 'FIRESTORE DATA LOADED'
+                  : 'READY TO SEED'}
             </span>
           </div>
           <p className="text-xs text-slate-400 leading-relaxed">
-            Syncs simulated 4-crew state to Firestore: <strong>AG-LEO-01</strong> SAFE,{' '}
-            <strong>AG-LEO-02</strong> CAUTION, <strong>AG-LEO-03</strong> DANGER,{' '}
-            <strong>AG-LEO-04</strong> SAFE.
+            {isLocalDemoSession ? (
+              <>
+                Loads simulated 4-crew state in memory for this signed-in session: <strong>AG-LEO-01</strong>{' '}
+                SAFE, <strong>AG-LEO-02</strong> CAUTION, <strong>AG-LEO-03</strong> DANGER,{' '}
+                <strong>AG-LEO-04</strong> SAFE. No Firestore write is performed.
+              </>
+            ) : (
+              <>
+                Writes simulated 4-crew state to Firestore: <strong>AG-LEO-01</strong> SAFE,{' '}
+                <strong>AG-LEO-02</strong> CAUTION, <strong>AG-LEO-03</strong> DANGER,{' '}
+                <strong>AG-LEO-04</strong> SAFE.
+              </>
+            )}
           </p>
           <button
             type="button"
@@ -362,11 +397,25 @@ export function MedicalChiefWorkspace({
             className="ag-nav-3d w-full py-2 px-3 rounded-xl bg-[#105BD8] hover:bg-[#196BF2] text-white text-xs font-semibold transition-colors disabled:opacity-60"
           >
             {seeding
-              ? 'Syncing 4-Crew Dataset...'
-              : isFirestoreSeeded
-                ? 'Reset 4-Crew Demo Scenario (03 in DANGER)'
-                : 'Initialize 4-Crew Mission Dataset in Firestore'}
+              ? isLocalDemoSession
+                ? 'Resetting Local Dataset...'
+                : 'Writing 4-Crew Dataset...'
+              : isLocalDemoSession
+                ? 'Reset Local 4-Crew Demo Scenario (03 in DANGER)'
+                : isFirestoreSeeded
+                  ? 'Reset 4-Crew Firestore Scenario (03 in DANGER)'
+                  : 'Initialize 4-Crew Mission Dataset in Firestore'}
           </button>
+          {seedFeedback && (
+            <p
+              className={`text-xs leading-relaxed ${
+                seedFeedback.startsWith('Dataset sync failed') ? 'text-red-300' : 'text-emerald-300'
+              }`}
+              role="status"
+            >
+              {seedFeedback}
+            </p>
+          )}
         </div>
 
         {/* Clean Centralized Crew List (Name, Crew ID, Status Indicator, Active Warning, Timestamp, Ack Status) */}
@@ -380,16 +429,16 @@ export function MedicalChiefWorkspace({
             const statusBadge =
               member.status === 'Critical'
                 ? {
-                    label: 'RED — DANGER',
+                    label: 'DANGER',
                     cls: 'bg-red-500/20 text-red-200 border border-red-500/60'
                   }
                 : member.status === 'Watch'
                   ? {
-                      label: 'YELLOW — CAUTION',
+                      label: 'CAUTION',
                       cls: 'bg-amber-500/15 text-amber-200 border border-amber-400/50'
                     }
                   : {
-                      label: 'GREEN — SAFE',
+                      label: 'SAFE',
                       cls: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/35'
                     };
 
@@ -416,27 +465,27 @@ export function MedicalChiefWorkspace({
                         : 'ag-surface-primary hover:border-sky-400/35'
                 }`}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
                     <AstronautPortrait
                       crewId={member.id}
                       name={member.name}
                       status={memberHealthLevel}
                       size="md"
                     />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-sm font-semibold text-white truncate">
+                        <span className="text-sm font-semibold text-white leading-snug break-words">
                           {member.name}
                         </span>
                         <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-black/30 text-sky-300 border border-white/10 shrink-0">
                           {member.id}
                         </span>
                       </div>
-                      <div className="text-xs text-slate-400 mt-0.5 truncate">
-                        {member.rank || memberIdentity?.rank || 'Flight Crew'} · {member.role}
+                      <div className="text-xs text-slate-400 mt-0.5 leading-snug line-clamp-2">
+                        {member.role || memberIdentity?.missionRole || member.rank || 'Flight Crew'}
                       </div>
-                      <div className="text-xs font-mono text-slate-500 mt-0.5 truncate">
+                      <div className="text-[11px] font-mono text-slate-500 mt-0.5 leading-snug break-words">
                         {member.designationCode || memberIdentity?.designationCode || member.id} ·{' '}
                         {member.flightDay || memberIdentity?.flightDay || 'FD-084 / 180'}
                       </div>
@@ -774,6 +823,14 @@ export function MedicalChiefWorkspace({
             </div>
           </>
         )}
+
+        {/* Python engine readiness and countermeasure completion for the selected crew member */}
+        <PythonHealthPanel
+          report={pythonReport}
+          loading={pythonLoading}
+          error={pythonError}
+          title={`MEDICAL CHIEF MONITORING · ${selectedCrewId}`}
+        />
 
         {/* Clinical Tabs: Trends, Countermeasures, Evidence, RBAC Provisioning & Audit Logs */}
         <div className="p-4 sm:p-5 rounded-2xl ag-surface-primary space-y-4">

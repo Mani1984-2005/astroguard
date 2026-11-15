@@ -293,3 +293,94 @@ export interface AssessmentInputs {
   visualClarity: number;
   notes: string;
 }
+
+// ---------------------------------------------------------------------------
+// Python health engine report (additive; TypeScript engine remains fallback)
+// ---------------------------------------------------------------------------
+export type PythonParameterStatus = 'NORMAL' | 'WATCH' | 'ALERT' | 'NO_DATA';
+
+export type PythonCondition = 'FINE' | 'CAUTION' | 'DANGER' | 'NO SIGNAL';
+
+export interface PythonDomainResult {
+  status: PythonParameterStatus;
+  summary: Record<string, unknown>;
+  trend: Record<string, unknown>;
+  alerts: string[];
+  actions: string[];
+  note?: string;
+  personal_baseline?: Record<string, unknown>;
+}
+
+export interface PythonContributingParameter {
+  parameter: string;
+  label: string;
+  status: PythonParameterStatus;
+  summary: Record<string, unknown>;
+  reason: string;
+  critical: boolean;
+}
+
+export interface PythonCountermeasure {
+  id: string;
+  code: string;
+  parameter: string;
+  label: string;
+  title: string;
+  instruction: string;
+  priority: 'CRITICAL' | 'ROUTINE';
+  evidence: {
+    source: string;
+    rule: string;
+    note: string;
+  };
+  completionStatus: 'PENDING' | 'COMPLETED';
+  progress: number;
+}
+
+export interface PythonHealthReport {
+  condition: PythonCondition;
+  readiness: number;
+  overall_status: 'NORMAL' | 'WATCH' | 'ALERT' | 'LIMITED_DATA' | 'INSUFFICIENT_DATA';
+  condition_reason: string;
+  contributing_parameters: PythonContributingParameter[];
+  critical_alerts: string[];
+  alert_domains: string[];
+  watch_domains: string[];
+  readiness_components: {
+    starting_score: number;
+    penalties: Array<{ parameter: string; status: PythonParameterStatus; penalty: number }>;
+    penalty_total: number;
+    missing_data_cap_applied: boolean;
+  };
+  data_quality: {
+    domains_with_no_data: string[];
+    coverage_pct: number;
+    invalid_value_counts: Record<string, number>;
+    validation: {
+      valid: boolean;
+      errors: string[];
+      warnings: string[];
+      invalid_columns: Record<string, number>;
+      row_count: number;
+    };
+    warning: string | null;
+  };
+  parameter_definitions: Record<
+    string,
+    { label: string; unit: string; source: string }
+  >;
+  domains: Record<string, PythonDomainResult>;
+  countermeasures: PythonCountermeasure[];
+  countermeasure_summary: {
+    total: number;
+    completed: number;
+    pending: number;
+    completion_pct: number;
+  };
+  alerts: string[];
+  actions: string[];
+  model_disclaimer: string;
+  engine: string;
+  is_simulated: boolean;
+  crew_id: string | null;
+}

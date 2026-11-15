@@ -30,6 +30,8 @@ export function EmergencyAlertModal({
   onClose
 }: EmergencyAlertModalProps) {
   const identity = getAstronautIdentity(alert.astronautId);
+  const hasDistinctPreviousReading =
+    Boolean(alert.previousReading) && alert.previousReading !== alert.currentReading;
 
   return (
     <div
@@ -137,7 +139,7 @@ export function EmergencyAlertModal({
                 PREVIOUS READING
               </div>
               <div className="text-xl font-mono font-semibold text-slate-200 mt-1 tabular-nums">
-                {alert.previousReading}
+                {hasDistinctPreviousReading ? alert.previousReading : 'Not available'}
               </div>
             </div>
           </div>

@@ -32,3 +32,10 @@ build/
 
 # Private server runtime data
 server-data/
+
+# Python engine runtime artefacts
+__pycache__/
+*.py[cod]
+python_engine/muscle_model.joblib
+python_engine/bone_model.json
+python_engine/demo_output/

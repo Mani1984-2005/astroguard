@@ -50,7 +50,7 @@ export function SimulationControlPanel({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {(Object.keys(SIMULATION_SCENARIOS) as SimulationScenarioId[]).map((id) => {
           const preset = SIMULATION_SCENARIOS[id];
           const isSelected = activeScenario === id;
@@ -66,7 +66,7 @@ export function SimulationControlPanel({
               }`}
             >
               <div className="text-xs font-mono opacity-85">{preset.badge}</div>
-              <div className="text-sm font-semibold truncate">{preset.label}</div>
+              <div className="text-sm font-semibold leading-snug">{preset.label}</div>
             </button>
           );
         })}

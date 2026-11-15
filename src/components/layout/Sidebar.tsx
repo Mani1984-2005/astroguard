@@ -71,7 +71,7 @@ export const ASTROGUARD_MODULES: NavItemConfig[] = [
   },
   {
     id: 'medical-chief',
-    label: 'Medical Chief Workspace',
+    label: 'Medical Chief',
     shortDesc: 'Flight surgeon & alerts',
     icon: Stethoscope
   }
