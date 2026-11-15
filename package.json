@@ -11,6 +11,9 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:python": "python -m unittest discover -s python_engine/tests -v",
+    "test:security": "node scripts/security-dev-server-check.mjs",
+    "test:integration": "node scripts/integration-express-python.mjs",
+    "test:bridge-timeout": "node scripts/integration-bridge-timeout.mjs",
     "demo:scenario": "python -m python_engine.demo_scenario --out python_engine/demo_output"
   },
   "dependencies": {

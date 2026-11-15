@@ -153,13 +153,17 @@ python -m unittest discover -s python_engine/tests -v
 ```
 
 The suite covers valid/invalid/missing measurements, all 11 domains, critical
-and non-critical alerts, readiness determinism, trends, countermeasure
-completion, and FastAPI success/failure responses.
+and non-critical alerts, severe self-reported stress escalation, readiness
+determinism, trends, countermeasure completion, persistence, and FastAPI
+success/failure responses.
 
 ## 9. Known limitations
 
 - Thresholds and weights are prototype placeholders, not clinical guidance.
 - Bone and muscle models use simulated calibration; no DXA or MRI validation.
+- The muscle model's held-out synthetic metrics are next-30-day MAE `0.198%`
+  (mean-prediction baseline `1.005%`) and R² `0.911`; cumulative MAE is
+  `0.584%` and R² `0.923`. These are simulated-label diagnostics only.
 - Radiation accounting uses a simplified 600 mSv career reference. It is not a
   live NASA flight rule or a substitute for current NASA radiation-protection
   standards; verify the applicable limit before operational use.

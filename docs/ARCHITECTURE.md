@@ -140,7 +140,10 @@ The Firestore blueprint and rules define these collections:
 `firestore.rules` denies access by default, then permits scoped reads/writes by
 active, verified role holders. Astronauts can access only their own crew
 records; Medical Chief access is role-checked. The rules file is the source of
-truth for browser-side Firestore access and was not modified in this QA pass.
+truth for browser-side Firestore access. It no longer grants a role from a
+hardcoded email: Chief access requires an active `users/{uid}` profile or the
+server-issued `astroguardRole: MEDICAL_CHIEF` custom claim. Audit-log writes must
+match the authenticated UID, email, and current role.
 
 The local demo workspace bypasses Firestore intentionally. It is labelled
 `LOCAL DEMO READY` and does not claim a Firestore write. Firebase-backed sessions
@@ -149,14 +152,27 @@ show `FIRESTORE DATA LOADED` only when the roster was loaded from Firestore.
 ## 7. Security controls in the Express boundary
 
 - JSON body limit: 128 kB.
-- Static/server path blocks for `server-data`, `.astroguard-server`, `scripts`,
-  `python_engine`, `.env`, `server.ts`, `firestore.rules`, and blueprint files.
+- Loopback-only default bind (`127.0.0.1`); `HOST` is an explicit override.
+- Strict Vite filesystem access with deny globs for auth stores, secrets, keys,
+  backups, source rules, scripts, engines, logs, and `.git`.
+- Decoded, separator-normalized path blocking for direct and `/@fs/` requests,
+  including encoded and traversal variants.
+- Same-origin `Origin`/`Referer` and `Sec-Fetch-Site` checks on state-changing
+  requests; `TRUSTED_ORIGINS` is an explicit proxy allowlist.
 - HttpOnly session cookies; HTTPS adds `Secure` and `Partitioned`.
-- Signed sessions and expiry checks.
+- Signed sessions and expiry checks. HMAC key rotation invalidates old sessions.
+- Logout revokes the session ID in a local single-instance store so a copied
+  cookie cannot be replayed after logout.
+- Security headers: `nosniff`, `DENY` framing, no-referrer, restrictive
+  permissions, COOP/CORP, HTTPS HSTS, plus an enforced CSP for framing/base/object
+  restrictions and a report-only full CSP pending browser validation.
 - Medical Chief login rate limiting.
 - Role and crew checks on every health route.
-- Firebase bearer verification requires a verified email.
-- Server-side audit logging for denied or privileged actions where implemented.
+- Firebase bearer verification requires a verified email and active role profile.
+- No email-based Firestore role bootstrap; custom claims are server-issued.
+- Server-side audit logging with size rotation and malformed-line tolerance.
+- Python bridge request timeouts terminate/restart the worker so one hung request
+  cannot block later health analyses.
 - Python source is not served; direct `/python_engine/*` requests return 404.
 
 ## 8. Known architectural limits

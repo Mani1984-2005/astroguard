@@ -18,9 +18,16 @@ and five-day outcomes are simulated. They are not real astronaut medical data.
   not silently substitute a healthy value.
 - A WATCH finding prevents `FINE`; a report with any WATCH is at least
   `CAUTION`.
+- Severe self-reported stress (prototype guard: 8/10 or more over three days)
+  independently forces the stress domain to `ALERT`. The 6/10 WATCH and 8/10
+  ALERT guards are policy placeholders, not validated psychological cut-offs.
 - Four or more missing domains with no alert can produce `NO SIGNAL`.
 - Bone and muscle estimates are long-horizon, simulated models. They are not
   instant recovery predictions and must not be read as tissue-healing claims.
+- The current muscle model's held-out synthetic metrics are next-30-day MAE
+  `0.198%` (mean-prediction baseline `1.005%`, about `80%` lower error) and
+  R² `0.911`; cumulative MAE is `0.584%` and R² `0.923`. These are
+  simulated-label diagnostics only, not real astronaut accuracy.
 - The Day 5 scenario is `CAUTION`, not `FINE`; one WATCH domain remains.
 - Blood-pressure simulation is limited by the telemetry snapshot shape. The
   Python daily log uses the crew profile's blood-pressure fields, so a live UI

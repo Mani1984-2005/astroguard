@@ -43,7 +43,7 @@ import {
   evaluateCrewHealth
 } from '../engine/healthEvaluationEngine';
 
-export const BOOTSTRAPPED_CHIEF_EMAIL = 'manikantadindawar21@gmail.com';
+
 
 function sanitizeId(raw: string): string {
   return raw.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 120);
@@ -109,17 +109,27 @@ export async function resolveOrInitializeUserProfile(
     };
   }
 
-  // Determine initial role strictly from bootstrapped chief email or Medical Chief pre-provisioned binding
+  // Roles come only from a server-issued custom claim or an operator-created
+  // pre-provisioned binding. There is no email-based bootstrap path. Missing
+  // bindings fall back to PENDING ASTRONAUT.
   let assignedRole: UserRole = 'ASTRONAUT';
   let assignedCrewId = 'UNASSIGNED';
   let assignedStatus: UserProfile['accountStatus'] = 'PENDING';
   let displayName = firebaseUser.displayName || emailLower.split('@')[0] || 'AstroGuard User';
 
-  if (emailLower === BOOTSTRAPPED_CHIEF_EMAIL) {
+  let hasChiefClaim = false;
+  try {
+    const tokenResult = await firebaseUser.getIdTokenResult();
+    hasChiefClaim = tokenResult.claims.astroguardRole === 'MEDICAL_CHIEF';
+  } catch {
+    // Token claim unavailable; fall back to the provisioned binding path.
+  }
+
+  if (hasChiefClaim) {
     assignedRole = 'MEDICAL_CHIEF';
     assignedCrewId = 'MCC-ALL';
     assignedStatus = 'ACTIVE';
-    displayName = firebaseUser.displayName || 'Dr. M. Thorne (Medical Chief)';
+    displayName = firebaseUser.displayName || 'Medical Chief';
   } else if (emailLower) {
     const provPath = `provisionedAccounts/${emailLower}`;
     try {

@@ -23,16 +23,18 @@ FastAPI/JSON-lines health engine.
 ## Quick start
 
 **Prerequisites:** Node.js 20+ and Python 3.11+. This QA pass ran on Node
-24.17.0 and Python 3.11.9; other versions were not tested.
+24.22.1 and Python 3.15.1; other versions were not tested.
 
 ```powershell
-cd E:\astroguard
+cd C:\path\to\astroguard
 npm install
 python -m pip install -r python_engine/requirements.txt
 npm run dev
 ```
 
-Open <http://127.0.0.1:3000> (or the value of `PORT` if you override it).
+Open <http://127.0.0.1:3000> (or the value of `PORT` if you override it). Express
+binds to loopback by default. Set `HOST` only when external access is explicitly
+required; the server prints a warning when that override is used.
 
 The Express server starts the Python bridge on demand. The Python service is not
 publicly exposed; all browser health calls pass through the authenticated
@@ -41,14 +43,16 @@ publicly exposed; all browser health calls pass through the authenticated
 Express does not trust forwarded headers by default. If deploying behind a
 reverse proxy, set `TRUST_PROXY` to the exact trusted proxy hop count or to
 comma-separated trusted proxy IP/CIDR values so client IP and HTTPS cookie
-handling use only the configured proxy chain.
+handling use only the configured proxy chain. Set `TRUSTED_ORIGINS` to the exact
+public origin(s) if the proxy rewrites the browser-visible `Host`.
 
 ## Medical Chief access
 
-Provision the Medical Chief password hash without putting a password in the
-repository:
+Set `MEDICAL_CHIEF_EMAIL` to the Firebase account email, then provision the
+Medical Chief password hash without putting a password in the repository:
 
 ```powershell
+$env:MEDICAL_CHIEF_EMAIL = "chief@example.org"
 npx tsx scripts/provision-medical-chief.ts --stdin
 ```
 
@@ -57,6 +61,12 @@ server-side auth store at `server-data/medical-chief-auth.json`. It does not
 print the password or hash. Do not commit generated auth files or passwords.
 Alternatively, set a scrypt `MEDICAL_CHIEF_PASSWORD_HASH` in the server
 environment and let the server use the `ENV_HASH` auth source.
+
+Role assignment has no email-based bootstrap backdoor. Firestore authorization
+comes from an active `users/{uid}` profile or the server-issued
+`astroguardRole: MEDICAL_CHIEF` custom claim. The first Chief account and its
+`provisionedAccounts/{email}` binding must be created by a trusted operator
+using the Firebase Console/Admin SDK or an existing Chief session.
 
 For a local demonstration without Firebase Admin credentials, use the Medical
 Chief login and select the built-in **LOCAL DEMO READY** 4-crew workspace. This
@@ -69,13 +79,22 @@ Firestore.
 npm run lint
 npm run build
 npm run test:python
+npm run test:security
+npm run test:integration
+npm run test:bridge-timeout
 npm run demo:scenario
 npm audit --omit=dev
 ```
 
 The Python suite covers all eleven domains, invalid and missing measurements,
-critical-alert forcing, WATCH-to-CAUTION behavior, repeatability, countermeasure
-completion, and FastAPI success/failure responses.
+critical-alert forcing, WATCH-to-CAUTION behavior, severe self-reported stress
+escalation, repeatability, countermeasure completion, and FastAPI
+success/failure responses. `test:security` starts an isolated dev server and
+checks `/@fs/`, encoded, traversal, cross-origin, security-header, and
+external-binding paths without printing file contents. `test:integration`
+exercises the real Express-to-Python bridge and logout session revocation.
+`test:bridge-timeout` forces a hung stub worker to verify timeout termination
+and replacement-worker recovery.
 
 ## Documentation
 
@@ -95,8 +114,14 @@ completion, and FastAPI success/failure responses.
   silently treated as healthy.
 - A WATCH finding prevents a `FINE` label. Any WATCH or ALERT is at least
   `CAUTION`.
+- A severe self-reported stress score (prototype escalation guard: 8/10 or more
+  over three days) independently forces the stress domain to `ALERT`; it cannot
+  be averaged away by otherwise normal inputs.
 - Bone and muscle forecasts are long-horizon, simulated models. Day 5 of the
   demo does not model instant tissue recovery.
+- The muscle model reports held-out synthetic metrics, including a
+  mean-prediction baseline comparison. Those numbers are not clinical
+  validation.
 - Firebase bearer access requires a verified email and an active Firestore
   profile. Live Firebase Admin bearer testing was not possible in the current
   environment because service-account credentials are absent.

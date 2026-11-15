@@ -18,11 +18,7 @@ interface ProvisionedChiefRecord {
 
 const STORE_DIR = path.resolve(process.cwd(), 'server-data');
 const STORE_PATH = path.join(STORE_DIR, 'medical-chief-auth.json');
-const DEFAULT_CHIEF_EMAIL = (
-  process.env.MEDICAL_CHIEF_EMAIL || 'manikantadindawar21@gmail.com'
-)
-  .trim()
-  .toLowerCase();
+const DEFAULT_CHIEF_EMAIL = (process.env.MEDICAL_CHIEF_EMAIL || '').trim().toLowerCase();
 
 function hashPasswordScrypt(password: string): string {
   const saltHex = crypto.randomBytes(16).toString('hex');
@@ -60,9 +56,9 @@ async function main(): Promise<void> {
   }
 
   const normalizedPassword = password.replace(/\r?\n$/, '');
-  if (!normalizedPassword || normalizedPassword.length < 6 || normalizedPassword.length > 256) {
+  if (!normalizedPassword || normalizedPassword.length < 8 || normalizedPassword.length > 256) {
     console.error(
-      '[AstroGuard Provision] Provide a password between 6 and 256 characters via --stdin or CHIEF_PROVISION_PASSWORD.'
+      '[AstroGuard Provision] Provide a password between 8 and 256 characters via --stdin or CHIEF_PROVISION_PASSWORD.'
     );
     process.exit(1);
   }
@@ -70,6 +66,13 @@ async function main(): Promise<void> {
   let existing: ProvisionedChiefRecord | null = null;
   if (fs.existsSync(STORE_PATH)) {
     existing = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')) as ProvisionedChiefRecord;
+  }
+
+  if (!existing && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(DEFAULT_CHIEF_EMAIL)) {
+    console.error(
+      '[AstroGuard Provision] Set MEDICAL_CHIEF_EMAIL to the Firebase account email before the first provisioning run.'
+    );
+    process.exit(1);
   }
 
   const now = new Date().toISOString();

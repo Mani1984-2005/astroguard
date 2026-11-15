@@ -57,7 +57,7 @@ Firestore data; it contains public client configuration, not the database.
 
 ## 5. Restore the application
 
-1. Restore the project files to `E:\astroguard`.
+1. Restore the project files to the chosen project directory.
 2. Install dependencies:
 
    ```powershell
@@ -69,12 +69,15 @@ Firestore data; it contains public client configuration, not the database.
    provision a new Medical Chief credential:
 
    ```powershell
+   $env:MEDICAL_CHIEF_EMAIL = "chief@example.org"
    npx tsx scripts/provision-medical-chief.ts --stdin
    ```
 
    This writes `server-data/medical-chief-auth.json`; it does not print the
    password or hash. If your deployment uses the environment-hash path instead,
-   set a scrypt `MEDICAL_CHIEF_PASSWORD_HASH` in the server environment.
+   set a scrypt `MEDICAL_CHIEF_PASSWORD_HASH` in the server environment. There is
+   no email-based Firestore bootstrap role; create the first provisioned account
+   binding through the Firebase Console/Admin SDK or an existing Chief session.
 4. Restore a Firestore export only through the Firebase/Google Cloud tooling for
    the intended project.
 5. Start the server:

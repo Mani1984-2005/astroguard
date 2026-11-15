@@ -81,6 +81,10 @@ SPO2 = {"watch_mean": 95.0, "alert_mean": 92.0, "alert_min": 90.0}
 TEMP = {"watch_high": 37.5, "alert_high": 38.0, "watch_low": 36.0, "alert_low": 35.5}
 SLEEP = {"target": 7.0, "watch_mean": 6.5, "alert_mean": 5.5, "irregular_sd": 1.5, "debt_watch": 10.0}
 STRESS = {"watch": 35.0, "alert": 60.0,
+          # Prototype escalation guard: a severe self-report must not disappear
+          # into the weighted composite when other inputs look normal. These are
+          # policy placeholders, not validated psychological cut-offs.
+          "self_watch": 6.0, "self_alert": 8.0,
           "weights": {"sleep": 0.25, "hr": 0.20, "hrv": 0.20, "self": 0.25, "bp": 0.10}}
 RADIATION = {"career_limit_msv": 600.0,       # NASA career limit (confirm before citing)
              "rate_watch_msv_day": 1.0,        # PLACEHOLDER
@@ -135,7 +139,7 @@ PARAMETER_DEFINITIONS = {
     },
     "stress": {
         "label": "Stress", "unit": "index 0-100",
-        "source": "Transparent composite of sleep, HR, HRV, self-report and BP; weights are prototype assumptions.",
+        "source": "Transparent composite of sleep, HR, HRV, self-report and BP; weights and the self-report escalation guard are prototype assumptions.",
     },
     "radiation": {
         "label": "Radiation Exposure", "unit": "mSv/day",
@@ -486,7 +490,23 @@ def assess_stress(log):
     if slope > 1.0:
         alerts.append("Stress index is climbing day over day.")
         status = _worst(status, "WATCH")
-    return _result(status, {"stress_index": round(score, 1), "drivers": parts},
+
+    self_values = _col(log, "stress_self")
+    self_3d = _mean(self_values[-3:]) if self_values is not None else float("nan")
+    if np.isfinite(self_3d) and self_3d >= STRESS["self_alert"]:
+        status = "ALERT"
+        alerts.append(
+            f"Self-reported stress {self_3d:.1f}/10 over the last 3 days is severe; "
+            "this indicator independently raises the stress status."
+        )
+    elif np.isfinite(self_3d) and self_3d >= STRESS["self_watch"]:
+        status = _worst(status, "WATCH")
+        alerts.append(
+            f"Self-reported stress {self_3d:.1f}/10 over the last 3 days is elevated."
+        )
+
+    return _result(status, {"stress_index": round(score, 1), "self_report_3d": round(self_3d, 1)
+                            if np.isfinite(self_3d) else None, "drivers": parts},
                    {"slope_per_day": round(slope, 3), "direction": _direction(slope, 0.5)}, alerts, "stress")
 
 
@@ -690,16 +710,32 @@ class MuscleModel:
         def fit(target):
             m = GradientBoostingRegressor(n_estimators=200, max_depth=3, learning_rate=0.05, random_state=seed)
             m.fit(data[MUSCLE_FEATURES].iloc[tr], data[target].iloc[tr])
+            actual = data[target].iloc[te]
             p = m.predict(data[MUSCLE_FEATURES].iloc[te])
-            return m, {"MAE": float(mean_absolute_error(data[target].iloc[te], p)),
-                       "R2": float(r2_score(data[target].iloc[te], p))}
+            baseline = np.full(len(actual), float(data[target].iloc[tr].mean()))
+            baseline_mae = float(mean_absolute_error(actual, baseline))
+            mae = float(mean_absolute_error(actual, p))
+            return m, {"MAE": mae,
+                       "R2": float(r2_score(actual, p)),
+                       "baseline_MAE": baseline_mae,
+                       "skill_vs_baseline_pct": round(100.0 * (1.0 - mae / baseline_mae), 1)
+                       if baseline_mae > 0 else None}
 
         reg30, m30 = fit("nxt")
         
         regc, mc = fit("cum")
         if verbose:
             print(f"Muscle model (simulated data, held-out astronauts): next-30-day MAE={m30['MAE']:.3f}%  R2={m30['R2']:.3f}")
-        return cls(reg30, regc, {"next30": m30, "cumulative": mc})
+        return cls(reg30, regc, {
+            "model_version": "muscle-gbr-v2",
+            "features": MUSCLE_FEATURES,
+            "seed": seed,
+            "training_samples": int(len(tr)),
+            "validation_samples": int(len(te)),
+            "training_data": "synthetic simulated logs",
+            "next30": m30,
+            "cumulative": mc,
+        })
 
     def save(self, path=MUSCLE_MODEL_PATH):
         import joblib
@@ -893,6 +929,13 @@ class AstronautHealthMonitor:
 
         countermeasures = build_countermeasures(domains, countermeasure_status)
         completed = [c for c in countermeasures if c["completionStatus"] == "COMPLETED"]
+        next30 = self.muscle.metrics.get("next30", {})
+        metric_note = ""
+        if next30.get("MAE") is not None and next30.get("baseline_MAE") is not None:
+            metric_note = (
+                f" Held-out synthetic next-30-day MAE is {next30['MAE']:.2f}% versus a "
+                f"{next30['baseline_MAE']:.2f}% mean-prediction baseline."
+            )
         return {
             "condition": condition,
             "readiness": readiness,
@@ -916,8 +959,24 @@ class AstronautHealthMonitor:
             "model_disclaimer": (
                 "Prototype decision support only, using simulated/demo data. Vital thresholds, "
                 "personal-baseline rules and countermeasures are not clinically validated. "
-                "Bone and muscle forecasts use simulated labels. This is not a diagnostic device."
+                "Bone and muscle forecasts use simulated labels." + metric_note +
+                " This is not a diagnostic device."
             ),
+            "model_provenance": {
+                "muscle": {
+                    "model_type": "GradientBoostingRegressor",
+                    "training_data": "synthetic simulated exercise logs",
+                    "validation": "held-out synthetic astronauts (GroupShuffleSplit)",
+                    "metrics": self.muscle.metrics,
+                    "limitations": "Synthetic labels only; no real astronaut or clinical validation.",
+                },
+                "bone": {
+                    "model_type": "deterministic load-response model",
+                    "training_data": "simulated exercise profiles",
+                    "validation": "deterministic unit tests and simulated scenarios",
+                    "limitations": "Not a measured bone-density forecast; no clinical validation.",
+                },
+            },
             "parameter_definitions": PARAMETER_DEFINITIONS,
             "domains": domains,
             "countermeasures": countermeasures,

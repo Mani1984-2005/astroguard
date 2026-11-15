@@ -14,6 +14,7 @@ the only authorized boundary.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -33,7 +34,10 @@ _MONITOR = None
 def _monitor():
     global _MONITOR
     if _MONITOR is None:
-        _MONITOR = engine.AstronautHealthMonitor.load_or_train()
+        # stdout is the JSON-lines protocol channel. Model training diagnostics
+        # must go to stderr so they cannot corrupt the first bridge response.
+        with contextlib.redirect_stdout(sys.stderr):
+            _MONITOR = engine.AstronautHealthMonitor.load_or_train()
     return _MONITOR
 
 

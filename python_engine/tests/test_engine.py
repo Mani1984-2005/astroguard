@@ -87,6 +87,21 @@ class EngineTests(unittest.TestCase):
         self.assertNotEqual(report["condition"], "FINE")
         self.assertIn("Sleep", report["condition_reason"])
 
+    def test_severe_self_reported_stress_cannot_be_hidden_by_other_normal_inputs(self):
+        log = base_log()
+        log.loc[log.index[-3:], "stress_self"] = 9.0
+        report = self.monitor.analyze(log)
+        stress = report["domains"]["stress"]
+        self.assertEqual(stress["status"], "ALERT")
+        self.assertEqual(stress["summary"]["self_report_3d"], 9.0)
+        self.assertTrue(
+            any("Self-reported stress" in alert for alert in stress["alerts"]),
+            stress["alerts"],
+        )
+        self.assertNotEqual(report["condition"], "FINE")
+        self.assertIn("Stress", report["condition_reason"])
+        self.assertLess(report["readiness"], 100)
+
     def test_trends_are_calculated(self):
         log = base_log()
         log["resting_hr"] = range(60, 60 + len(log))

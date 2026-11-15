@@ -61,6 +61,12 @@ interface PendingBridgeRequest {
   timer: NodeJS.Timeout;
 }
 
+function bridgeTimeoutFromEnv(name: string, fallbackMs: number, minimumMs: number): number {
+  const parsed = Number.parseInt(process.env[name]?.trim() || '', 10);
+  if (!Number.isFinite(parsed)) return fallbackMs;
+  return Math.min(Math.max(parsed, minimumMs), 300_000);
+}
+
 class PythonHealthBridge {
   private child: ChildProcessWithoutNullStreams | null = null;
   private buffer = '';
@@ -69,14 +75,19 @@ class PythonHealthBridge {
   private readyReject: ((reason: Error) => void) | null = null;
   private seq = 0;
   private pending = new Map<string, PendingBridgeRequest>();
+  private generation = 0;
 
   private ensureStarted(): Promise<void> {
     if (this.readyPromise) return this.readyPromise;
-    const script = path.resolve(process.cwd(), 'python_engine', 'bridge.py');
+    const configuredScript = process.env.PYTHON_BRIDGE_SCRIPT?.trim();
+    const script = configuredScript
+      ? path.resolve(process.cwd(), configuredScript)
+      : path.resolve(process.cwd(), 'python_engine', 'bridge.py');
     if (!fs.existsSync(script)) {
       return Promise.reject(new Error('Python health bridge is not installed.'));
     }
     const executable = process.env.PYTHON_EXECUTABLE?.trim() || 'python';
+    const generation = ++this.generation;
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
@@ -89,23 +100,31 @@ class PythonHealthBridge {
     this.child = child;
 
     const startupTimer = setTimeout(() => {
+      if (this.generation !== generation) return;
       this.failBridge(new Error('Python health bridge startup timed out.'));
-    }, 45_000);
+    }, bridgeTimeoutFromEnv('PYTHON_BRIDGE_STARTUP_TIMEOUT_MS', 45_000, 1_000));
 
     child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => this.onStdout(chunk, startupTimer));
+    child.stdout.on('data', (chunk: string) => {
+      if (this.generation === generation) this.onStdout(chunk, startupTimer);
+    });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
-      console.error('[AstroGuard Python]', chunk.trim().slice(0, 500));
+      if (this.generation === generation) {
+        console.error('[AstroGuard Python]', chunk.trim().slice(0, 500));
+      }
     });
     child.stdin.on('error', (error) => {
+      if (this.generation !== generation) return;
       this.failBridge(new Error(`Unable to write to Python health engine: ${error.message}`));
     });
     child.on('error', (error) => {
+      if (this.generation !== generation) return;
       clearTimeout(startupTimer);
       this.failBridge(new Error(`Unable to start Python health engine: ${error.message}`));
     });
     child.on('exit', (code) => {
+      if (this.generation !== generation) return;
       clearTimeout(startupTimer);
       this.failAll(new Error(`Python health engine exited (code ${code ?? 'unknown'}).`));
       this.reset();
@@ -149,6 +168,7 @@ class PythonHealthBridge {
   }
 
   private reset(): void {
+    this.generation += 1;
     this.child = null;
     this.readyPromise = null;
     this.readyResolve = null;
@@ -156,11 +176,29 @@ class PythonHealthBridge {
     this.buffer = '';
   }
 
+  private terminateChild(child: ChildProcessWithoutNullStreams): void {
+    try {
+      child.kill();
+    } catch {
+      // Process already exited.
+    }
+    const forceTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Best-effort forced termination.
+        }
+      }
+    }, 1_000);
+    forceTimer.unref();
+  }
+
   private failBridge(error: Error): void {
     const child = this.child;
     this.failAll(error);
     this.reset();
-    child?.kill();
+    if (child) this.terminateChild(child);
   }
 
   private failAll(error: Error): void {
@@ -176,21 +214,26 @@ class PythonHealthBridge {
     await this.ensureStarted();
     const child = this.child;
     if (!child) throw new Error('Python health engine is unavailable.');
+    const generation = this.generation;
     const id = `${Date.now()}_${++this.seq}`;
     const requestLine = JSON.stringify({ id, action, payload }) + '\n';
     const response = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error('Python health engine request timed out.'));
-      }, 30_000);
+        if (this.generation !== generation) return;
+        this.failBridge(
+          new Error('Python health engine request timed out; worker restarted.')
+        );
+      }, bridgeTimeoutFromEnv('PYTHON_BRIDGE_REQUEST_TIMEOUT_MS', 30_000, 100));
       this.pending.set(id, { resolve, reject, timer });
     });
     try {
       child.stdin.write(requestLine);
     } catch (error) {
-      this.failBridge(
-        error instanceof Error ? error : new Error('Unable to write to Python health engine.')
-      );
+      if (this.generation === generation) {
+        this.failBridge(
+          error instanceof Error ? error : new Error('Unable to write to Python health engine.')
+        );
+      }
     }
     return response;
   }
@@ -200,7 +243,7 @@ class PythonHealthBridge {
     if (!child) return;
     this.failAll(new Error('Python health bridge is shutting down.'));
     this.reset();
-    child.kill();
+    this.terminateChild(child);
   }
 }
 
@@ -222,22 +265,24 @@ interface ProvisionedChiefRecord {
 }
 
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST?.trim() || '127.0.0.1';
 const TRUST_PROXY_SETTING = process.env.TRUST_PROXY?.trim();
 const ALLOWED_CREW_IDS = new Set(['AG-LEO-01', 'AG-LEO-02', 'AG-LEO-03', 'AG-LEO-04']);
-const BOOTSTRAPPED_CHIEF_EMAIL = (
-  process.env.MEDICAL_CHIEF_EMAIL || 'manikantadindawar21@gmail.com'
-)
-  .trim()
-  .toLowerCase();
+const CONFIGURED_CHIEF_EMAIL = (process.env.MEDICAL_CHIEF_EMAIL || '').trim().toLowerCase();
 
 const MAX_FAILED_ATTEMPTS = 5;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const CREW_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const AUDIT_LOG_PATH = path.join(os.tmpdir(), 'astroguard-security-audit.log');
+const AUDIT_LOG_BACKUP_PATH = `${AUDIT_LOG_PATH}.1`;
+const MAX_AUDIT_LOG_BYTES = 5 * 1024 * 1024;
 const AUTH_STORE_DIR = path.resolve(process.cwd(), 'server-data');
 const CHIEF_AUTH_STORE_PATH = path.join(AUTH_STORE_DIR, 'medical-chief-auth.json');
 const HMAC_KEY_PATH = path.join(AUTH_STORE_DIR, 'session-hmac.key');
+const SESSION_REVOCATION_STORE_PATH = process.env.SESSION_REVOCATION_STORE?.trim()
+  ? path.resolve(process.cwd(), process.env.SESSION_REVOCATION_STORE.trim())
+  : path.join(AUTH_STORE_DIR, 'revoked-sessions.json');
 
 function loadOrCreateSessionHmacSecret(): string {
   const envSecret = process.env.SESSION_HMAC_SECRET?.trim();
@@ -343,7 +388,15 @@ function appendSecurityAudit(entry: {
     details: entry.details
   };
   try {
-    fs.appendFileSync(AUDIT_LOG_PATH, JSON.stringify(record) + '\n', { mode: 0o600 });
+    const line = JSON.stringify(record) + '\n';
+    if (
+      fs.existsSync(AUDIT_LOG_PATH) &&
+      fs.statSync(AUDIT_LOG_PATH).size + Buffer.byteLength(line) > MAX_AUDIT_LOG_BYTES
+    ) {
+      fs.rmSync(AUDIT_LOG_BACKUP_PATH, { force: true });
+      fs.renameSync(AUDIT_LOG_PATH, AUDIT_LOG_BACKUP_PATH);
+    }
+    fs.appendFileSync(AUDIT_LOG_PATH, line, { mode: 0o600 });
   } catch (error) {
     console.error('[AstroGuard Server] Failed to write local security audit log:', error);
   }
@@ -412,7 +465,7 @@ function readProvisionedChiefAccount(): ProvisionedChiefRecord | null {
     }
     return {
       userId: parsed.userId || 'MCC_CHIEF_PRIMARY',
-      email: (parsed.email || BOOTSTRAPPED_CHIEF_EMAIL).trim().toLowerCase(),
+      email: (parsed.email || CONFIGURED_CHIEF_EMAIL).trim().toLowerCase(),
       displayName: parsed.displayName || 'Dr. M. Thorne (Medical Chief)',
       role: 'MEDICAL_CHIEF',
       crewId: 'MCC-ALL',
@@ -458,7 +511,7 @@ function getActiveChiefAuthConfig(): {
       authSource: 'ENV_HASH',
       account: stored || {
         userId: 'MCC_CHIEF_PRIMARY',
-        email: BOOTSTRAPPED_CHIEF_EMAIL,
+        email: CONFIGURED_CHIEF_EMAIL,
         displayName: 'Dr. M. Thorne (Medical Chief)',
         role: 'MEDICAL_CHIEF',
         crewId: 'MCC-ALL',
@@ -567,6 +620,96 @@ function verifySessionToken<T>(token: string): T | null {
   }
 }
 
+const revokedSessions = new Map<string, number>();
+let revokedSessionsLoaded = false;
+
+function pruneRevokedSessions(now = Date.now()): void {
+  for (const [sessionId, expiresAt] of revokedSessions) {
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) revokedSessions.delete(sessionId);
+  }
+}
+
+function ensureRevokedSessionsLoaded(): void {
+  if (revokedSessionsLoaded) return;
+  revokedSessionsLoaded = true;
+  try {
+    if (!fs.existsSync(SESSION_REVOCATION_STORE_PATH)) return;
+    const parsed = JSON.parse(fs.readFileSync(SESSION_REVOCATION_STORE_PATH, 'utf8')) as unknown;
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && Array.isArray((parsed as { sessions?: unknown }).sessions)
+        ? (parsed as { sessions: unknown[] }).sessions
+        : [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      const sessionId = (entry as { sessionId?: unknown }).sessionId;
+      const expiresAt = (entry as { expiresAt?: unknown }).expiresAt;
+      if (
+        typeof sessionId === 'string' &&
+        /^[A-Za-z0-9_-]{8,128}$/.test(sessionId) &&
+        typeof expiresAt === 'number' &&
+        Number.isFinite(expiresAt)
+      ) {
+        revokedSessions.set(sessionId, expiresAt);
+      }
+    }
+    pruneRevokedSessions();
+  } catch (error) {
+    console.error('[AstroGuard] Could not load revoked-session store.', error);
+  }
+}
+
+function persistRevokedSessions(): void {
+  ensureRevokedSessionsLoaded();
+  pruneRevokedSessions();
+  const payload = JSON.stringify(
+    [...revokedSessions].map(([sessionId, expiresAt]) => ({ sessionId, expiresAt })),
+    null,
+    2
+  );
+  const tempPath = `${SESSION_REVOCATION_STORE_PATH}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(SESSION_REVOCATION_STORE_PATH), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tempPath, payload + '\n', { mode: 0o600 });
+    fs.renameSync(tempPath, SESSION_REVOCATION_STORE_PATH);
+  } catch (error) {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // Best-effort temporary-file cleanup.
+    }
+    console.error('[AstroGuard] Could not persist revoked-session store.', error);
+  }
+}
+
+function revokeSession(sessionId: unknown, expiresAt: unknown): boolean {
+  if (
+    typeof sessionId !== 'string' ||
+    !/^[A-Za-z0-9_-]{8,128}$/.test(sessionId) ||
+    typeof expiresAt !== 'number' ||
+    !Number.isFinite(expiresAt)
+  ) {
+    return false;
+  }
+  ensureRevokedSessionsLoaded();
+  revokedSessions.set(sessionId, expiresAt);
+  persistRevokedSessions();
+  return true;
+}
+
+function isSessionRevoked(sessionId: unknown): boolean {
+  if (typeof sessionId !== 'string' || !sessionId) return true;
+  ensureRevokedSessionsLoaded();
+  const expiresAt = revokedSessions.get(sessionId);
+  if (expiresAt === undefined) return false;
+  if (expiresAt <= Date.now()) {
+    revokedSessions.delete(sessionId);
+    persistRevokedSessions();
+    return false;
+  }
+  return true;
+}
+
 function parseCookies(req: Request): Record<string, string> {
   const header = req.headers.cookie;
   const out: Record<string, string> = {};
@@ -629,6 +772,7 @@ function getVerifiedChiefSession(req: Request): SignedChiefSessionPayload | null
   if (!verified || verified.role !== 'MEDICAL_CHIEF' || verified.crewId !== 'MCC-ALL') {
     return null;
   }
+  if (isSessionRevoked(verified.sessionId)) return null;
   return verified;
 }
 
@@ -645,6 +789,7 @@ function getVerifiedCrewSession(req: Request): SignedCrewSessionPayload | null {
   ) {
     return null;
   }
+  if (isSessionRevoked(verified.sessionId)) return null;
   return verified;
 }
 
@@ -679,15 +824,6 @@ async function getApiActor(req: Request): Promise<ApiActor | null> {
         return null;
       }
       const email = (decoded.email || '').trim().toLowerCase();
-      if (email === BOOTSTRAPPED_CHIEF_EMAIL) {
-        return {
-          role: 'MEDICAL_CHIEF',
-          crewId: 'MCC-ALL',
-          userId: decoded.uid,
-          email,
-          source: 'FIREBASE_BEARER'
-        };
-      }
       const userSnap = await adminDb.collection('users').doc(decoded.uid).get();
       const data = userSnap.data();
       if (
@@ -723,8 +859,160 @@ function denyUnauthorized(req: Request, res: Response): void {
   res.status(401).json({ ok: false, error: 'Authentication required for health data.' });
 }
 
+function normalizeRequestPath(rawPath: string): string {
+  let decoded = rawPath;
+  for (let pass = 0; pass < 3; pass += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+  return decoded.replace(/\\/g, '/').toLowerCase();
+}
+
+const SENSITIVE_PATH_SEGMENTS = new Set([
+  'server-data',
+  '.astroguard-server',
+  'python_engine',
+  'scripts'
+]);
+
+const SENSITIVE_FILENAMES = new Set([
+  'server.ts',
+  'firestore.rules',
+  'firebase-blueprint.json',
+  'security_spec.md'
+]);
+
+const SENSITIVE_EXTENSIONS = new Set([
+  '.key',
+  '.pem',
+  '.crt',
+  '.p12',
+  '.pfx',
+  '.jks',
+  '.keystore',
+  '.bak',
+  '.backup',
+  '.old',
+  '.orig',
+  '.tmp',
+  '.log'
+]);
+
+const VITE_FS_DENY = [
+  '**/server-data/**',
+  '**/.astroguard-server/**',
+  '**/python_engine/**',
+  '**/scripts/**',
+  '**/server.ts',
+  '**/firestore.rules',
+  '**/firebase-blueprint.json',
+  '**/security_spec.md',
+  '**/.env',
+  '**/.env.*',
+  '**/*.key',
+  '**/*.pem',
+  '**/*.crt',
+  '**/*.p12',
+  '**/*.pfx',
+  '**/*.jks',
+  '**/*.keystore',
+  '**/*.bak',
+  '**/*.backup',
+  '**/*.old',
+  '**/*.orig',
+  '**/*.tmp',
+  '**/*.log',
+  '**/.git/**'
+];
+
+function isSensitiveRequestPath(rawPath: string): boolean {
+  const normalized = normalizeRequestPath(rawPath);
+  if (normalized.includes('\0')) return true;
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.includes('..')) return true;
+  if (segments.some((segment) => SENSITIVE_PATH_SEGMENTS.has(segment))) return true;
+  const filename = segments[segments.length - 1] || '';
+  if (SENSITIVE_FILENAMES.has(filename)) return true;
+  if (filename === '.env' || filename.startsWith('.env.')) return true;
+  return segments.some((segment) => {
+    const dot = segment.lastIndexOf('.');
+    return dot >= 0 && SENSITIVE_EXTENSIONS.has(segment.slice(dot));
+  });
+}
+
+function normalizeOrigin(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === 'null') return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+const TRUSTED_ORIGINS = new Set(
+  (process.env.TRUSTED_ORIGINS || '')
+    .split(',')
+    .map(normalizeOrigin)
+    .filter((origin): origin is string => Boolean(origin))
+);
+
+function isAllowedStateChangingOrigin(req: Request): boolean {
+  if (req.get('sec-fetch-site')?.toLowerCase() === 'cross-site') return false;
+  const sourceHeader = req.get('origin') || req.get('referer');
+  if (!sourceHeader) return true;
+  const sourceOrigin = normalizeOrigin(sourceHeader);
+  if (!sourceOrigin) return false;
+  const host = req.get('host');
+  const expectedOrigins = new Set(TRUSTED_ORIGINS);
+  if (host) expectedOrigins.add(`${req.protocol}://${host}`);
+  return expectedOrigins.has(sourceOrigin);
+}
+
+const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 async function startServer(): Promise<void> {
   const app = express();
+  app.disable('x-powered-by');
+  const isProductionServer = process.env.NODE_ENV === 'production';
+  const reportOnlyCsp = [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    isProductionServer
+      ? "script-src 'self' https://www.gstatic.com 'wasm-unsafe-eval'"
+      : "script-src 'self' 'unsafe-inline' https://www.gstatic.com 'wasm-unsafe-eval'",
+    "worker-src 'self' blob: https://www.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "img-src 'self' data: blob: https://upload.wikimedia.org",
+    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://www.gstatic.com",
+    "frame-src 'self' https://*.firebaseapp.com",
+    "manifest-src 'self'"
+  ].join('; ');
+  app.use((req: Request, res: Response, next) => {
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
+    res.setHeader('Content-Security-Policy-Report-Only', reportOnlyCsp);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    if (req.secure) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  });
+
   if (!TRUST_PROXY_SETTING) {
     app.set('trust proxy', false);
   } else if (/^\d+$/.test(TRUST_PROXY_SETTING)) {
@@ -737,23 +1025,43 @@ async function startServer(): Promise<void> {
   }
   app.use(express.json({ limit: '128kb' }));
 
-  // Block direct HTTP access to server-side secrets, auth store, scripts, or rules files
+  // Block direct and Vite /@fs/ access to server-side secrets, auth stores,
+  // scripts, engines, rules, environment files, key material and backups.
+  // The decoded, separator-normalized path prevents encoded/traversal bypasses.
   app.use((req: Request, res: Response, next) => {
-    const normalizedPath = req.path.toLowerCase();
-    if (
-      normalizedPath.startsWith('/server-data') ||
-      normalizedPath.startsWith('/.astroguard-server') ||
-      normalizedPath.startsWith('/scripts') ||
-      normalizedPath.startsWith('/python_engine') ||
-      normalizedPath.startsWith('/.env') ||
-      normalizedPath === '/server.ts' ||
-      normalizedPath === '/firestore.rules' ||
-      normalizedPath === '/firebase-blueprint.json'
-    ) {
+    if (isSensitiveRequestPath(req.path)) {
       res.status(404).end();
       return;
     }
     next();
+  });
+
+  // Reject cross-origin state-changing browser requests. Cookie-authenticated
+  // sessions use SameSite=None on HTTPS, so Origin/Referer validation is required
+  // in addition to CORS not being enabled. Non-browser clients without Origin
+  // headers remain supported; set TRUSTED_ORIGINS for a known reverse proxy.
+  app.use((req: Request, res: Response, next) => {
+    if (!STATE_CHANGING_METHODS.has(req.method)) {
+      next();
+      return;
+    }
+    if (isAllowedStateChangingOrigin(req)) {
+      next();
+      return;
+    }
+    appendSecurityAudit({
+      eventType: 'ORIGIN_CHECK_REJECTED',
+      actor: 'UNAUTHENTICATED',
+      target: req.path.slice(0, 200),
+      outcome: 'DENIED',
+      ip: getClientIp(req),
+      details: `Rejected ${req.method} request with a disallowed origin.`
+    });
+    res.status(403).json({
+      ok: false,
+      code: 'ORIGIN_REJECTED',
+      error: 'Cross-origin state-changing request rejected.'
+    });
   });
 
   // Zero-404 asset discovery manifest for optional user-supplied Earth textures & GLB/GLTF satellite models
@@ -886,6 +1194,23 @@ async function startServer(): Promise<void> {
 
     // If Firebase Admin SDK is configured, also enforce Firebase user/role verification and mint Custom Token
     if (adminAuth && adminDb) {
+      if (!activeConfig.account.email) {
+        appendSecurityAudit({
+          eventType: 'CHIEF_AUTH_EMAIL_UNCONFIGURED',
+          actor: 'SYSTEM',
+          target: 'portal/medical-chief',
+          outcome: 'CONFIG_ERROR',
+          ip,
+          details: 'MEDICAL_CHIEF_EMAIL is required when Firebase Admin is configured.'
+        });
+        res.status(503).json({
+          ok: false,
+          code: 'BACKEND_AUTH_NOT_CONFIGURED',
+          configurationRequired: true,
+          error: 'Medical Chief email is not configured for Firebase authorization.'
+        });
+        return;
+      }
       try {
         const userRecord = await adminAuth.getUserByEmail(activeConfig.account.email);
         if (!userRecord.emailVerified) {
@@ -1145,40 +1470,56 @@ async function startServer(): Promise<void> {
     }
 
     try {
-      if (!fs.existsSync(AUDIT_LOG_PATH)) {
+      const lines: string[] = [];
+      for (const logPath of [AUDIT_LOG_BACKUP_PATH, AUDIT_LOG_PATH]) {
+        if (!fs.existsSync(logPath)) continue;
+        try {
+          lines.push(...fs.readFileSync(logPath, 'utf8').split('\n'));
+        } catch (error) {
+          console.error('[AstroGuard Server] Failed to read an audit log segment:', error);
+        }
+      }
+      if (lines.length === 0) {
         res.json({ ok: true, logs: [] });
         return;
       }
-      const lines = fs
-        .readFileSync(AUDIT_LOG_PATH, 'utf8')
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .slice(-50)
-        .reverse();
 
-      const logs = lines.map((line, idx) => {
-        const entry = JSON.parse(line) as {
-          ts: string;
-          eventType: string;
-          actor: string;
-          actorEmail?: string;
-          actorRole?: 'ASTRONAUT' | 'MEDICAL_CHIEF' | 'UNASSIGNED';
-          target: string;
-          outcome: string;
-          details: string;
-        };
-        return {
-          id: `SRV_LOG_${idx}_${entry.ts}`,
-          actorUserId: entry.actor,
-          actorEmail: entry.actorEmail || '',
-          actorRole: entry.actorRole || 'UNASSIGNED',
-          action: `${entry.eventType} (${entry.outcome})`,
-          targetRecord: entry.target,
-          details: entry.details,
-          timestamp: entry.ts
-        };
-      });
+      const logs: Array<{
+        id: string;
+        actorUserId: string;
+        actorEmail: string;
+        actorRole: string;
+        action: string;
+        targetRecord: string;
+        details: string;
+        timestamp: string;
+      }> = [];
+      for (const line of lines.filter(Boolean).slice(-50).reverse()) {
+        try {
+          const entry = JSON.parse(line) as {
+            ts: string;
+            eventType: string;
+            actor: string;
+            actorEmail?: string;
+            actorRole?: 'ASTRONAUT' | 'MEDICAL_CHIEF' | 'UNASSIGNED';
+            target: string;
+            outcome: string;
+            details: string;
+          };
+          logs.push({
+            id: `SRV_LOG_${logs.length}_${entry.ts}`,
+            actorUserId: entry.actor,
+            actorEmail: entry.actorEmail || '',
+            actorRole: entry.actorRole || 'UNASSIGNED',
+            action: `${entry.eventType} (${entry.outcome})`,
+            targetRecord: entry.target,
+            details: entry.details,
+            timestamp: entry.ts
+          });
+        } catch {
+          // Skip a malformed historical line rather than breaking the whole feed.
+        }
+      }
 
       res.json({ ok: true, logs });
     } catch (error) {
@@ -1236,15 +1577,14 @@ async function startServer(): Promise<void> {
 
   // Verify server-signed Crew session (prevents browser state/URL spoofing)
   app.get('/api/auth/crew-session', (req: Request, res: Response) => {
-    const cookies = parseCookies(req);
-    const token = cookies['astroguard_crew_session'];
-    if (!token) {
+    const tokens = parseCookies(req);
+    if (!tokens['astroguard_crew_session']) {
       res.status(401).json({ ok: false, error: 'No active crew session token.' });
       return;
     }
 
-    const verified = verifySessionToken<SignedCrewSessionPayload>(token);
-    if (!verified || !ALLOWED_CREW_IDS.has(verified.crewId) || verified.role !== 'ASTRONAUT') {
+    const verified = getVerifiedCrewSession(req);
+    if (!verified) {
       clearHttpOnlyCookie(req, res, 'astroguard_crew_session');
       res.status(401).json({ ok: false, error: 'Invalid or expired crew session token.' });
       return;
@@ -1261,6 +1601,12 @@ async function startServer(): Promise<void> {
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
     const ip = getClientIp(req);
+    const crewSession = getVerifiedCrewSession(req);
+    const chiefSession = getVerifiedChiefSession(req);
+    const revokedCount = [
+      crewSession ? revokeSession(crewSession.sessionId, crewSession.exp) : false,
+      chiefSession ? revokeSession(chiefSession.sessionId, chiefSession.exp) : false
+    ].filter(Boolean).length;
     clearHttpOnlyCookie(req, res, 'astroguard_crew_session');
     clearHttpOnlyCookie(req, res, 'astroguard_chief_session');
     appendSecurityAudit({
@@ -1269,7 +1615,7 @@ async function startServer(): Promise<void> {
       target: 'portal/logout',
       outcome: 'ALLOWED',
       ip,
-      details: 'Session cookies cleared.'
+      details: `Session cookies cleared; ${revokedCount} server-side session identifier(s) revoked.`
     });
     res.json({ ok: true });
   });
@@ -1446,7 +1792,14 @@ async function startServer(): Promise<void> {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: HOST === '0.0.0.0' || HOST === '::' ? true : [HOST, '127.0.0.1', 'localhost'],
+        fs: {
+          strict: true,
+          deny: VITE_FS_DENY
+        }
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);
@@ -1458,8 +1811,13 @@ async function startServer(): Promise<void> {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[AstroGuard] Full-stack mission server listening on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[AstroGuard] Full-stack mission server listening on http://${HOST}:${PORT}`);
+    if (HOST !== '127.0.0.1' && HOST !== '::1' && HOST !== 'localhost') {
+      console.warn(
+        `[AstroGuard] HOST override "${HOST}" exposes this local demonstration beyond loopback.`
+      );
+    }
   });
 }
 

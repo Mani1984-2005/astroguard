@@ -43,8 +43,8 @@ service cloud.firestore {
       return request.auth.token.email is string ? request.auth.token.email.lower() : '';
     }
 
-    function isBootstrappedMedicalChief() {
-      return isVerifiedUser() && authEmailLower() == 'manikantadindawar21@gmail.com';
+    function hasChiefCustomClaim() {
+      return isVerifiedUser() && request.auth.token.astroguardRole == 'MEDICAL_CHIEF';
     }
 
     function userDocExists() {
@@ -56,7 +56,7 @@ service cloud.firestore {
     }
 
     function isMedicalChief() {
-      return isBootstrappedMedicalChief() || (
+      return hasChiefCustomClaim() || (
         isVerifiedUser() &&
         userDocExists() &&
         userDoc().role == 'MEDICAL_CHIEF' &&
@@ -74,6 +74,12 @@ service cloud.firestore {
 
     function isActiveUser() {
       return isMedicalChief() || isActiveAstronaut();
+    }
+
+    function currentActorRole() {
+      return isMedicalChief()
+        ? 'MEDICAL_CHIEF'
+        : (userDocExists() ? userDoc().role : 'UNASSIGNED');
     }
 
     function isCrewOwner(crewId) {
@@ -358,7 +364,9 @@ service cloud.firestore {
       isValidId(data.actorUserId) &&
       data.actorUserId == request.auth.uid &&
       data.actorEmail is string && data.actorEmail.size() >= 3 && data.actorEmail.size() <= 254 &&
+      data.actorEmail == authEmailLower() &&
       data.actorRole in ['ASTRONAUT', 'MEDICAL_CHIEF', 'UNASSIGNED'] &&
+      data.actorRole == currentActorRole() &&
       data.action is string && data.action.size() >= 1 && data.action.size() <= 120 &&
       data.targetRecord is string && data.targetRecord.size() >= 1 && data.targetRecord.size() <= 200 &&
       data.details is string && data.details.size() <= 500 &&
